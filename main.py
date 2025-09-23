@@ -12,6 +12,13 @@ video_coca = "videos/cocacola.mp4"
 video_sprite = "videos/sprite.mp4"
 video_coca_sprite = "videos/coca-sprite.mp4"
 video_sprite_coca = "videos/sprite-coca.mp4"
+video_iphone = "videos/iphone17promax.mp4"
+video_fanta = "videos/fanta.mp4"
+video_delvalle = "videos/delvalle.mp4"
+video_close = "videos/close.mp4"
+video_far = "videos/far.mp4"
+video_right = "videos/right.mp4"
+video_left = "videos/left.mp4"
 
 # Evento para detener hilos
 stop_event = threading.Event()
@@ -46,8 +53,30 @@ def read_serial(puerto, baudrate):
                             video_to_play = video_coca
                         elif linea == "XR[PU002]":
                             video_to_play = video_sprite
-
                     previous_line = linea
+                if linea.startswith("X003A") and not linea.startswith("X003A[4]"):
+                    if linea == "X003A[3]":
+                        video_to_play = video_iphone
+                if linea.startswith("X001A"):
+                    if linea == "X001A[17]":
+                        video_to_play = video_fanta
+                    elif linea == "X001A[3]":
+                        video_to_play = video_delvalle
+                    print(">>", linea)
+                if linea.startswith("X002B"):
+                    print(">>", linea)
+                    print("Rotary Button")
+                if linea.startswith("X004B"):   
+                    if linea == "X004B[Bs=FAR]":
+                        video_to_play = video_far
+                    elif linea == "X004B[Bs=NEAR]":
+                        video_to_play = video_close
+                if linea.startswith("X002B"):
+                    rotary_button = int(linea.split("Dr=")[1].rstrip("]")) 
+                    if 1 <= rotary_button <= 10:
+                        video_to_play = video_left
+                    elif 11 <= rotary_button <= 20:
+                        video_to_play = video_right             
 
 
     except serial.SerialException as e:
