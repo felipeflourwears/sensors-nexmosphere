@@ -19,6 +19,7 @@ video_close = "videos/close.mp4"
 video_far = "videos/far.mp4"
 video_right = "videos/right.mp4"
 video_left = "videos/left.mp4"
+video_presence_sensor = "videos/presence_sensor.mp4"
 
 # Evento para detener hilos
 stop_event = threading.Event()
@@ -76,7 +77,10 @@ def read_serial(puerto, baudrate):
                     if 1 <= rotary_button <= 10:
                         video_to_play = video_left
                     elif 11 <= rotary_button <= 20:
-                        video_to_play = video_right             
+                        video_to_play = video_right  
+                if linea.startswith("X005B"):
+                    if linea == "X005B[Dz=AB]":
+                        video_to_play = video_presence_sensor
 
 
     except serial.SerialException as e:

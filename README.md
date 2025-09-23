@@ -41,5 +41,5 @@ X001A[0]  --> Dejar de hacer press en ambos casos
 
 ### Presence Sensor
 ```bash
-
+X005B[Dz=AB] --> Presence
 ```
