@@ -7,14 +7,14 @@ puerto = "COM3"
 baudrate = 115200
 
 # ---------- Videos ----------
-video_loop = "videos/loop.mp4"
-video_coca = "videos/cocacola.mp4"
-video_sprite = "videos/sprite.mp4"
-video_coca_sprite = "videos/coca-sprite.mp4"
-video_sprite_coca = "videos/sprite-coca.mp4"
-video_iphone = "videos/iphone17promax.mp4"
-video_fanta = "videos/fanta.mp4"
-video_delvalle = "videos/delvalle.mp4"
+video_loop = "colgate/loop.mp4"
+video_rfid_1 = "colgate/rfid-1.mp4"
+video_rfid_2 = "colgate/rfid-2.mp4"
+video_rfid_1_2 = "colgate/rfid-1-2.mp4"
+video_rfid_2_1 = "colgate/rfid-2-1.mp4"
+video_magnetic_sensor = "colgate/magnetic-sensor.mp4"
+video_push_button1 = "colgate/push-button1.mp4"
+video_push_button2 = "videos/push-button2.mp4"
 video_close = "videos/close.mp4"
 video_far = "videos/far.mp4"
 video_right = "videos/right.mp4"
@@ -44,25 +44,25 @@ def read_serial(puerto, baudrate):
                         # Detectar transición PU001 → PU002
                         if previous_line == "XR[PU001]" and linea == "XR[PU002]":
                             print("Coca-Sprite")
-                            video_to_play = video_coca_sprite
+                            video_to_play = video_rfid_1_2
                         # Detectar transición PU002 → PU001
                         elif previous_line == "XR[PU002]" and linea == "XR[PU001]":
                             print("Sprite-Coca")
-                            video_to_play = video_sprite_coca
+                            video_to_play = video_rfid_2_1
                         # Video normal individual
                         elif linea == "XR[PU001]":
-                            video_to_play = video_coca
+                            video_to_play = video_rfid_1
                         elif linea == "XR[PU002]":
-                            video_to_play = video_sprite
+                            video_to_play = video_rfid_2
                     previous_line = linea
                 if linea.startswith("X003A") and not linea.startswith("X003A[4]"):
                     if linea == "X003A[3]":
-                        video_to_play = video_iphone
+                        video_to_play = video_magnetic_sensor
                 if linea.startswith("X001A"):
                     if linea == "X001A[17]":
-                        video_to_play = video_fanta
+                        video_to_play = video_push_button1
                     elif linea == "X001A[3]":
-                        video_to_play = video_delvalle
+                        video_to_play = video_push_button2
                     print(">>", linea)
                 if linea.startswith("X002B"):
                     print(">>", linea)
