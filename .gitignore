@@ -1,1 +1,10 @@
 __pycache__/
+# Videos
+lala/
+colgate/
+
+# Documentation PDFs
+documentacion/
+
+# Windows trash
+*.Zone.Identifier
