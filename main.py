@@ -1,147 +1,757 @@
+#!/usr/bin/env python3
+"""
+Nexmosphere XN-185 (DM-XN10) — Main controller
+================================================
+Hardware layout:
+  X-talk 001 | XT-B4N6   Push button interface
+  X-talk 002 | XDW-A50   Analog interface (Rotary encoder)
+  X-talk 003 | XSW-X36   X-Snapper magnetic sensor
+  X-talk 004 | XT-EF30   AirButton sensor
+  X-talk 005 | XY-240    Presence & AirButton sensor
+  X-talk 006 | XZ-L20    Light sensor
+  X-talk 007 | XR-DR1    RFID sensor
+  X-talk 008 | XW-L56    X-Wave LED (5 LEDs)
+"""
+
+import sys
+import logging
+import threading
+from typing import Callable, NamedTuple
+
 import cv2
 import serial
-import threading
+import serial.tools.list_ports
 
-# ---------- Configuración serial ----------
-puerto = "COM3"
-baudrate = 115200
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
 
-# ---------- Videos ----------
-video_loop = "colgate/loop.mp4"
-video_rfid_1 = "colgate/rfid-1.mp4"
-video_rfid_2 = "colgate/rfid-2.mp4"
-video_rfid_1_2 = "colgate/rfid-1-2.mp4"
-video_rfid_2_1 = "colgate/rfid-2-1.mp4"
-video_magnetic_sensor = "colgate/magnetic-sensor.mp4"
-video_push_button1 = "colgate/push-button1.mp4"
-video_push_button2 = "videos/push-button2.mp4"
-video_close = "videos/close.mp4"
-video_far = "videos/far.mp4"
-video_right = "videos/right.mp4"
-video_left = "videos/left.mp4"
-video_presence_sensor = "videos/presence_sensor.mp4"
+# ---------------------------------------------------------------------------
+# Video paths
+# ---------------------------------------------------------------------------
+VIDEO_LOOP            = "lala/loop.mp4"
+VIDEO_RFID_1          = "lala/rfid-1.mp4"
+VIDEO_RFID_2          = "lala/rfid-2.mp4"
+VIDEO_RFID_1_2        = "lala/rfid-1-2.mp4"
+VIDEO_RFID_2_1        = "lala/rfid-1-2.mp4"
+VIDEO_MAGNETIC_SENSOR = "lala/magnetic-sensor.mp4"
+VIDEO_PUSH_BUTTON1    = "lala/push-button1.mp4"
+VIDEO_PUSH_BUTTON2    = "lala/push-button2.mp4"
+VIDEO_CLOSE           = "videos/close.mp4"
+VIDEO_FAR             = "videos/far.mp4"
+VIDEO_RIGHT           = "videos/right.mp4"
+VIDEO_LEFT            = "videos/left.mp4"
+VIDEO_PRESENCE_SENSOR = "videos/presence_sensor.mp4"
 
-# Evento para detener hilos
-stop_event = threading.Event()
-
-# Variable compartida para indicar qué video reproducir
-video_to_play = video_loop
-video_lock = threading.Lock()
-
-
-def read_serial(puerto, baudrate):
-    global video_to_play
-    try:
-        ser = serial.Serial(puerto, baudrate, timeout=1)
-        print(f"Escuchando en {puerto} a {baudrate} baudios...\n")
-        previous_line = None
-        while not stop_event.is_set():
-            if ser.in_waiting > 0:
-                linea = ser.readline().decode(errors='ignore').strip()
-                if linea.startswith("XR"):
-                    print(">>", linea)
-                    with video_lock:
-                        # Detectar transición PU001 → PU002
-                        if previous_line == "XR[PU001]" and linea == "XR[PU002]":
-                            print("Coca-Sprite")
-                            video_to_play = video_rfid_1_2
-                        # Detectar transición PU002 → PU001
-                        elif previous_line == "XR[PU002]" and linea == "XR[PU001]":
-                            print("Sprite-Coca")
-                            video_to_play = video_rfid_2_1
-                        # Video normal individual
-                        elif linea == "XR[PU001]":
-                            video_to_play = video_rfid_1
-                        elif linea == "XR[PU002]":
-                            video_to_play = video_rfid_2
-                    previous_line = linea
-                if linea.startswith("X003A") and not linea.startswith("X003A[4]"):
-                    if linea == "X003A[3]":
-                        video_to_play = video_magnetic_sensor
-                if linea.startswith("X001A"):
-                    if linea == "X001A[17]":
-                        video_to_play = video_push_button1
-                    elif linea == "X001A[3]":
-                        video_to_play = video_push_button2
-                    print(">>", linea)
-                if linea.startswith("X002B"):
-                    print(">>", linea)
-                    print("Rotary Button")
-                if linea.startswith("X004B"):   
-                    if linea == "X004B[Bs=FAR]":
-                        video_to_play = video_far
-                    elif linea == "X004B[Bs=NEAR]":
-                        video_to_play = video_close
-                if linea.startswith("X002B"):
-                    rotary_button = int(linea.split("Dr=")[1].rstrip("]")) 
-                    if 1 <= rotary_button <= 10:
-                        video_to_play = video_left
-                    elif 11 <= rotary_button <= 20:
-                        video_to_play = video_right  
-                if linea.startswith("X005B"):
-                    if linea == "X005B[Dz=AB]":
-                        video_to_play = video_presence_sensor
+# ---------------------------------------------------------------------------
+# Serial config
+# ---------------------------------------------------------------------------
+BAUD_RATE    = 115200
+PORT_KEYWORD = "Prolific"   # Substring to match in the port description
 
 
-    except serial.SerialException as e:
-        print(f"Error al abrir el puerto: {e}")
-    finally:
-        if 'ser' in locals() and ser.is_open:
-            ser.close()
-            print("Puerto cerrado.")
+# ===========================================================================
+# LED color profile
+# ===========================================================================
+class LedProfile(NamedTuple):
+    """
+    Full definition of a sensor's LED appearance.
+
+    label     : Hex char (0-F) — the custom color slot on the XW-L56.
+                Each profile owns a unique slot; LedController.init_colors()
+                programs the exact RGB into the device at startup.
+    r, g, b   : Exact RGB target (0-255).  These are programmed once via
+                the set_custom_color protocol command (X008B[1ARRGGBB]).
+                After that, only the label is referenced in ramp/pulse/wave
+                commands.  On power-cycle the device resets labels to its
+                default palette; init_colors() must be called again.
+    intensity : Final brightness 0-99 (99 = physical maximum).
+    ramp_time : Transition time in units of 0.1 s (0-99).
+    name      : Human-readable string used in console logs.
+    """
+    label:     str
+    r:         int
+    g:         int
+    b:         int
+    intensity: int
+    ramp_time: int
+    name:      str
 
 
-def play_videos():
-    global video_to_play
-    cap = cv2.VideoCapture(video_loop)
-    if not cap.isOpened():
-        print("Error al abrir el video")
-        return
+# ===========================================================================
+# LedController — XW-L56 X-Wave LED  (X-talk 008)
+# ===========================================================================
+class LedController:
+    """
+    Builds and sends X-Wave LED commands to the XW-L56 module
+    on X-talk interface 008.
 
-    cv2.namedWindow("Video", cv2.WINDOW_NORMAL)
-    cv2.setWindowProperty("Video", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    Protocol: "Manual – Controlling X-Wave LEDs (API)" v1.0
+    Commands are sent over the shared serial port.
 
-    current_video = video_loop
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │  Custom color : X008B[1ARRGGBB]                                     │
+    │    A  = color label  0-F                                            │
+    │    RR = Red   00-FF   GG = Green 00-FF   BB = Blue 00-FF            │
+    │                                                                     │
+    │  Single ramp  : X008B[2IICTT]                                       │
+    │    II = intensity 00-99   C = color label   TT = ramp × 0.1 s       │
+    │                                                                     │
+    │  Pulse        : X008B[3IICTTPPOIICTTRRTT]                           │
+    │    State1: II C TT   PP=01 (fixed)  O=0 (fixed)                     │
+    │    State2: II C TT   RR = repeats (00=∞)   TT = ramp time           │
+    │                                                                     │
+    │  Wave         : X008B[4IICDDPPOIICUULL]                             │
+    │    State1: II C   DD = duration   PP = program   O = direction      │
+    │    State2: II C   UU = reserved (00)   LL = LEDs for animation      │
+    │    Programs: 00=sym-sine  01=asym-sine  51-59=discrete              │
+    │    Direction: 1=left  2=right  3=outward  4=inward                  │
+    └─────────────────────────────────────────────────────────────────────┘
 
-    while not stop_event.is_set():
-        with video_lock:
-            # Si cambió el video a reproducir, reiniciar captura
-            if video_to_play != current_video:
-                current_video = video_to_play
-                cap.release()
-                cap = cv2.VideoCapture(current_video)
+    Color strategy
+    ──────────────
+    Each sensor gets a dedicated label slot (0-A).  On startup, init_colors()
+    programs each slot with an exact saturated RGB value via set_custom_color.
+    Subsequent ramp commands reference only the label, keeping the bus lean.
+    set_sensor_color() deduplicates: repeated calls with the same key are
+    silently ignored to avoid flooding the serial bus.
+    """
 
-        ret, frame = cap.read()
-        if not ret:
-            # Si es video especial (Coca/Sprite), volver al loop
-            if current_video != video_loop:
-                with video_lock:
-                    video_to_play = video_loop
-                current_video = video_loop
-                cap.release()
-                cap = cv2.VideoCapture(video_loop)
+    LED_ADDRESS = "008"
+
+    # ------------------------------------------------------------------
+    # Sensor → LED color mapping
+    # Labels 0-A are assigned exclusively to the keys below.
+    # Vivid, saturated RGB values are used so every sensor is visually
+    # unambiguous on the physical strip.
+    # ------------------------------------------------------------------
+    SENSOR_LED_MAP: dict[str, LedProfile] = {
+        #                label   R    G    B   int  ramp  display name
+        "RFID_1":         LedProfile("0", 255,   0,   0,  99,  5, "Rojo Puro"),
+        "RFID_2":         LedProfile("1",   0,   0, 255,  99,  5, "Azul Eléctrico"),
+        "PUSH_BTN_1":     LedProfile("2",   0, 255,   0,  99,  5, "Verde Neón"),
+        "PUSH_BTN_2":     LedProfile("3", 255, 255,   0,  99,  5, "Amarillo Intenso"),
+        "MAGNETIC":       LedProfile("4", 180,   0, 255,  99,  5, "Morado Fuerte"),
+        "ROTARY_LEFT":    LedProfile("5", 255,  80,   0,  99,  3, "Naranja Fuerte"),
+        "ROTARY_RIGHT":   LedProfile("6",   0, 255, 255,  99,  3, "Cyan Brillante"),
+        "PRESENCE":       LedProfile("7", 255, 255, 255,  99,  5, "Blanco Full"),
+        "AIRBUTTON_FAR":  LedProfile("8", 255,   0, 150,  99,  5, "Rosa Fuerte"),
+        "AIRBUTTON_NEAR": LedProfile("9",   0, 255, 180,  99,  5, "Turquesa Fuerte"),
+        "IDLE":           LedProfile("A",   0,  30, 100,  20, 10, "Azul Tenue"),
+    }
+
+    def __init__(self) -> None:
+        # Injected by SerialController once the port is open
+        self._ser: serial.Serial | None = None
+        # Active sensor key — used for deduplication in set_sensor_color()
+        self._current_key: str | None = None
+
+    # ------------------------------------------------------------------
+    # Startup
+    # ------------------------------------------------------------------
+
+    def init_colors(self) -> None:
+        """
+        Program every custom RGB color into the XW-L56 at startup.
+
+        Must be called once after the serial port is open.  The device
+        resets all label slots to its default palette on power-cycle, so
+        this method must run again on each application start.
+        """
+        log.info("LED: programando colores personalizados en el dispositivo...")
+        for key, p in self.SENSOR_LED_MAP.items():
+            self.set_custom_color(p.label, p.r, p.g, p.b)
+            log.info(
+                f"  Slot {p.label} ← {key:16s} RGB({p.r:3d},{p.g:3d},{p.b:3d})  [{p.name}]"
+            )
+        log.info("LED: colores listos.")
+
+    # ------------------------------------------------------------------
+    # Internal: low-level serial write
+    # ------------------------------------------------------------------
+
+    def _send(self, payload: str) -> None:
+        """Wrap payload in X008B[...] and write to serial."""
+        if self._ser is None or not self._ser.is_open:
+            log.warning("LED: serial no disponible, comando descartado.")
+            return
+        cmd = f"X{self.LED_ADDRESS}B[{payload}]\r\n"
+        log.info(f"LED << {cmd.strip()}")
+        self._ser.write(cmd.encode())
+
+    # ------------------------------------------------------------------
+    # Low-level command builders  (protocol layer)
+    # ------------------------------------------------------------------
+
+    def set_custom_color(self, label: str, r: int, g: int, b: int) -> None:
+        """
+        Program an exact RGB color into a label slot (0-F).
+
+        Does NOT change the current LED output — a ramp/pulse/wave command
+        that references this label must be sent afterwards.
+        Slots revert to device defaults after a power cycle.
+        """
+        self._send(f"1{label}{r:02X}{g:02X}{b:02X}")
+
+    def set_single_ramp(
+        self,
+        intensity:   int,
+        color_label: str = "0",
+        ramp_time:   int = 5,
+    ) -> None:
+        """
+        Set all LEDs to one color/brightness with a smooth ramp transition.
+
+        Args:
+            intensity:   0-99  (99 = maximum brightness)
+            color_label: Hex char 0-F
+            ramp_time:   0-99  in units of 0.1 s
+        """
+        intensity = max(0, min(99, intensity))
+        ramp_time = max(0, min(99, ramp_time))
+        self._send(f"2{intensity:02d}{color_label}{ramp_time:02d}")
+
+    def set_pulse(
+        self,
+        intensity1: int,
+        color1:     str,
+        time1:      int,
+        intensity2: int,
+        color2:     str,
+        time2:      int,
+        repeats:    int = 0,
+        ramp_time:  int = 10,
+    ) -> None:
+        """
+        Pulsing fade-in / fade-out between two states.
+
+        Args:
+            intensity1/2: 0-99
+            color1/2:     Hex char 0-F
+            time1/2:      02-99 × 0.1 s (includes ramp time)
+            repeats:      00 = infinite
+            ramp_time:    02-99 × 0.1 s  (must be ≤ time1 and time2)
+        """
+        payload = (
+            f"3{intensity1:02d}{color1}{time1:02d}"
+            f"010"                             # PP=01 fixed, O=0 fixed
+            f"{intensity2:02d}{color2}{time2:02d}"
+            f"{repeats:02d}{ramp_time:02d}"
+        )
+        self._send(payload)
+
+    def set_wave(
+        self,
+        intensity1: int,
+        color1:     str,
+        duration:   int,
+        program:    str,
+        direction:  int,
+        intensity2: int,
+        color2:     str,
+        leds:       int = 5,
+    ) -> None:
+        """
+        Animated wave pattern.
+
+        Args:
+            intensity1/2: 0-99
+            color1/2:     Hex char 0-F
+            duration:     02-99 × 0.1 s
+            program:      "00"=sym-sine / "01"=asym-sine / "51"-"59"=discrete
+            direction:    1=left  2=right  3=outward  4=inward
+            leds:         02-99 (minimum 02 for XW-L5)
+        """
+        payload = (
+            f"4{intensity1:02d}{color1}{duration:02d}"
+            f"{program}{direction}"
+            f"{intensity2:02d}{color2}"
+            f"00{leds:02d}"                   # UU=00 reserved
+        )
+        self._send(payload)
+
+    # ------------------------------------------------------------------
+    # Application-level helpers  (sensor layer)
+    # ------------------------------------------------------------------
+
+    def set_sensor_color(self, sensor_key: str) -> None:
+        """
+        Activate the pre-defined LED color for a sensor event.
+
+        Looks up sensor_key in SENSOR_LED_MAP and sends a single-ramp
+        command using the pre-programmed color slot.
+        Repeated calls with the same key are silently ignored.
+        """
+        if sensor_key == self._current_key:
+            return  # Already active — skip to avoid flooding the bus
+
+        profile = self.SENSOR_LED_MAP.get(sensor_key)
+        if profile is None:
+            log.warning(f"LED: sensor key desconocido '{sensor_key}'")
+            return
+
+        log.info(f"LED → {sensor_key} → {profile.name}")
+        self.set_single_ramp(profile.intensity, profile.label, profile.ramp_time)
+        self._current_key = sensor_key
+
+    def set_idle(self) -> None:
+        """Return LED to soft idle state (shown during the loop video)."""
+        self.set_sensor_color("IDLE")
+
+    def apply_rotary(self, value: int) -> None:
+        """
+        Rotary encoder: fixed color per range with dynamic brightness.
+
+        The COLOR is determined by the encoder range (naranja / cyan),
+        the BRIGHTNESS is scaled linearly across the position within
+        each range.  Every position change sends a new command (no
+        deduplication), because each position is a distinct light level.
+
+        Range  1-10  → Naranja Fuerte (slot 5), brightness 10 → 99
+        Range 11-20  → Cyan Brillante (slot 6), brightness 10 → 99
+        """
+        if 1 <= value <= 10:
+            key       = "ROTARY_LEFT"
+            intensity = int(10 + (value - 1) * (89 / 9))
+        elif 11 <= value <= 20:
+            key       = "ROTARY_RIGHT"
+            intensity = int(10 + (value - 11) * (89 / 9))
+        else:
+            return
+
+        profile = self.SENSOR_LED_MAP[key]
+        log.info(
+            f"LED → {key} → {profile.name}  "
+            f"(pos={value}, intensidad={intensity:02d})"
+        )
+        self.set_single_ramp(intensity, profile.label, profile.ramp_time)
+        self._current_key = key   # keep dedup context updated
+
+
+# ===========================================================================
+# VideoController
+# ===========================================================================
+class VideoController:
+    """
+    Full-screen OpenCV video playback.
+
+    - Loops VIDEO_LOOP by default.
+    - Any sensor can request a different video; it plays once, then
+      returns to the loop automatically.
+    - Thread-safe: video changes are posted via request() from any thread.
+    - Calls on_loop_return() whenever a clip ends and the player
+      transitions back to the idle loop (used to reset the LED to idle).
+    """
+
+    def __init__(
+        self,
+        stop_event:     threading.Event,
+        on_loop_return: Callable[[], None] | None = None,
+    ) -> None:
+        self._stop           = stop_event
+        self._on_loop_return = on_loop_return
+        self._lock           = threading.Lock()
+        self._next: str | None = None
+
+    def request(self, path: str) -> None:
+        """Request a video change (thread-safe, non-blocking)."""
+        with self._lock:
+            self._next = path
+
+    def run(self) -> None:
+        cap = cv2.VideoCapture(VIDEO_LOOP)
+        if not cap.isOpened():
+            log.error(f"No se pudo abrir el video de loop: {VIDEO_LOOP}")
+            self._stop.set()
+            return
+
+        cv2.namedWindow("Video", cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty("Video", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+        current = VIDEO_LOOP
+
+        while not self._stop.is_set():
+            # Apply pending video change if any
+            with self._lock:
+                if self._next is not None and self._next != current:
+                    current    = self._next
+                    self._next = None
+                    cap.release()
+                    cap = cv2.VideoCapture(current)
+                    log.info(f"Reproduciendo: {current}")
+
+            ret, frame = cap.read()
+
+            if not ret:
+                # End of clip — return to loop, or re-loop if already looping
+                if current != VIDEO_LOOP:
+                    log.info("Fin de clip, volviendo al loop.")
+                    current = VIDEO_LOOP
+                    cap.release()
+                    cap = cv2.VideoCapture(VIDEO_LOOP)
+                    if self._on_loop_return is not None:
+                        self._on_loop_return()
+                else:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
-            else:
-                # Loop del video principal
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                continue
 
-        cv2.imshow("Video", frame)
+            cv2.imshow("Video", frame)
 
-        if cv2.waitKey(25) & 0xFF == ord('q'):
-            stop_event.set()
-            break
+            if cv2.waitKey(25) & 0xFF == ord("q"):
+                self._stop.set()
+                break
 
-    cap.release()
-    cv2.destroyAllWindows()
+        cap.release()
+        cv2.destroyAllWindows()
+        log.info("VideoController detenido.")
 
 
+# ===========================================================================
+# SerialController
+# ===========================================================================
+class SerialController:
+    """
+    Detects the serial port automatically, reads incoming X-talk frames,
+    and dispatches sensor events to VideoController and LedController.
+
+    RFID state machine
+    ──────────────────
+    Two boolean flags track the independent presence of each RFID tag:
+
+        _rfid1  True while tag PU001 is detected on the reader
+        _rfid2  True while tag PU002 is detected on the reader
+
+    State transitions and their video/LED outcomes:
+
+        IDLE  (both False)
+          + XR[PU001]  →  ONLY1  → video_rfid_1,   LED Rojo
+          + XR[PU002]  →  ONLY2  → video_rfid_2,   LED Azul
+
+        ONLY1 (rfid1=True, rfid2=False)
+          + XR[PU002]  →  BOTH   → video_rfid_1_2, LED Azul (nuevo)
+          + removal    →  IDLE   → VIDEO_LOOP,      LED Idle
+
+        ONLY2 (rfid1=False, rfid2=True)
+          + XR[PU001]  →  BOTH   → video_rfid_2_1, LED Rojo (nuevo)
+          + removal    →  IDLE   → VIDEO_LOOP,      LED Idle
+
+        BOTH  (rfid1=True, rfid2=True)
+          + removal 1  →  ONLY2  → video_rfid_2,   LED Azul
+          + removal 2  →  ONLY1  → video_rfid_1,   LED Rojo
+          + all gone   →  IDLE   → VIDEO_LOOP,      LED Idle
+
+    Removal messages
+    ─────────────────
+    XR[P0000] is treated as "no tag present" and clears all active flags.
+    With a single reader this is correct.  If the installation uses two
+    separate readers (one per product), the removal message for each must
+    be disambiguated here — adjust _handle_rfid() accordingly.
+    """
+
+    def __init__(
+        self,
+        stop_event:   threading.Event,
+        video_ctrl:   VideoController,
+        led_ctrl:     LedController,
+        baud_rate:    int = BAUD_RATE,
+        port_keyword: str = PORT_KEYWORD,
+    ) -> None:
+        self._stop    = stop_event
+        self._video   = video_ctrl
+        self._led     = led_ctrl
+        self._baud    = baud_rate
+        self._keyword = port_keyword
+        self._ser: serial.Serial | None = None
+
+        # RFID state machine — independent presence flags
+        self._rfid1: bool = False
+        self._rfid2: bool = False
+
+    # ------------------------------------------------------------------
+    # Port auto-detection
+    # ------------------------------------------------------------------
+
+    def _find_port(self) -> str | None:
+        """Return the first port whose description contains PORT_KEYWORD."""
+        for info in serial.tools.list_ports.comports():
+            if self._keyword.lower() in info.description.lower():
+                return info.device
+        return None
+
+    # ------------------------------------------------------------------
+    # Thread entry point
+    # ------------------------------------------------------------------
+
+    def run(self) -> None:
+        port = self._find_port()
+        if port is None:
+            log.error(
+                f"No se encontró ningún puerto cuya descripción contenga "
+                f"'{self._keyword}'. "
+                "Verifica que el adaptador USB-serial Prolific esté conectado."
+            )
+            self._stop.set()
+            return
+
+        log.info(f"Puerto detectado: {port}")
+        try:
+            self._ser = serial.Serial(port, self._baud, timeout=1)
+            log.info(f"Escuchando en {port} a {self._baud} baudios...")
+
+            # Inject serial into LED controller and program all custom colors
+            self._led._ser = self._ser
+            self._led.init_colors()
+
+            while not self._stop.is_set():
+                if self._ser.in_waiting > 0:
+                    raw = self._ser.readline().decode(errors="ignore").strip()
+                    if raw:
+                        self._dispatch(raw)
+
+        except serial.SerialException as e:
+            log.error(f"Error en puerto serial: {e}")
+        finally:
+            self._close()
+
+    def _close(self) -> None:
+        if self._ser and self._ser.is_open:
+            self._ser.close()
+            log.info("Puerto serial cerrado.")
+
+    # ------------------------------------------------------------------
+    # Dispatcher
+    # ------------------------------------------------------------------
+
+    def _dispatch(self, line: str) -> None:
+        """Route an X-talk line to the appropriate sensor handler."""
+
+        if line.startswith("XR"):
+            # X-talk 007 — RFID (XR-DR1)
+            log.info(f"RFID      >> {line}")
+            self._handle_rfid(line)
+
+        elif line.startswith("X001A"):
+            # X-talk 001 — Push buttons (XT-B4N6)
+            log.info(f"PushBtn   >> {line}")
+            self._handle_push_button(line)
+
+        elif line.startswith("X002B"):
+            # X-talk 002 — Rotary encoder (XDW-A50)
+            log.info(f"Rotary    >> {line}")
+            self._handle_rotary(line)
+
+        elif line.startswith("X003A"):
+            # X-talk 003 — Magnetic sensor (XSW-X36)
+            self._handle_magnetic(line)
+
+        elif line.startswith("X004B"):
+            # X-talk 004 — AirButton (XT-EF30)
+            log.info(f"AirButton >> {line}")
+            self._handle_airbutton(line)
+
+        elif line.startswith("X005B"):
+            # X-talk 005 — Presence sensor (XY-240)
+            log.info(f"Presence  >> {line}")
+            self._handle_presence(line)
+
+    # ------------------------------------------------------------------
+    # RFID state machine
+    # ------------------------------------------------------------------
+
+    def _handle_rfid(self, line: str) -> None:
+        """
+        Update RFID boolean flags based on the incoming message, then
+        call _resolve_rfid_state() to apply the correct video and LED.
+
+        Detection:
+          XR[PU001] → rfid1 = True
+          XR[PU002] → rfid2 = True
+
+        Removal (single-reader setup):
+          XR[P0000] → clear all flags
+          (Adjust below for dual-reader installations)
+        """
+        prev1, prev2 = self._rfid1, self._rfid2
+
+        if line == "XR[PU001]":
+            self._rfid1 = True
+        elif line == "XR[PU002]":
+            self._rfid2 = True
+        elif line == "XR[P0000]":
+            # No tag present — clear whichever flags are active.
+            # NOTE for dual-reader setups: if reader 1 and reader 2 send
+            # separate "no tag" messages, split this into two conditions
+            # that only clear the corresponding flag (e.g. rfid1=False or
+            # rfid2=False), leaving the other flag untouched.
+            self._rfid1 = False
+            self._rfid2 = False
+        else:
+            return  # Unrecognised RFID message — ignore
+
+        # Skip resolution if state did not actually change
+        if self._rfid1 == prev1 and self._rfid2 == prev2:
+            return
+
+        self._resolve_rfid_state(prev1, prev2)
+
+    def _resolve_rfid_state(self, prev1: bool, prev2: bool) -> None:
+        """
+        Determine the correct video and LED output based on the current
+        RFID state and the previous state (to detect transition direction).
+
+        Called only when the state has actually changed.
+        """
+        now1, now2 = self._rfid1, self._rfid2
+        log.info(
+            f"RFID estado: PU001={'ON ' if now1 else 'OFF'} | "
+            f"PU002={'ON ' if now2 else 'OFF'}"
+        )
+
+        if now1 and now2:
+            # ── BOTH active ──────────────────────────────────────────────
+            if prev1 and not prev2:
+                # Was ONLY1, PU002 just arrived → Coca+Sprite transition
+                log.info("RFID transición: PU001 → PU001+PU002")
+                self._video.request(VIDEO_RFID_1_2)
+                self._led.set_sensor_color("RFID_2")   # color of arriving tag
+            elif prev2 and not prev1:
+                # Was ONLY2, PU001 just arrived → Sprite+Coca transition
+                log.info("RFID transición: PU002 → PU001+PU002")
+                self._video.request(VIDEO_RFID_2_1)
+                self._led.set_sensor_color("RFID_1")   # color of arriving tag
+            # else: already BOTH — maintain current video, no change
+
+        elif now1 and not now2:
+            # ── Only PU001 ───────────────────────────────────────────────
+            log.info("RFID: solo PU001 activo")
+            self._video.request(VIDEO_RFID_1)
+            self._led.set_sensor_color("RFID_1")
+
+        elif now2 and not now1:
+            # ── Only PU002 ───────────────────────────────────────────────
+            log.info("RFID: solo PU002 activo")
+            self._video.request(VIDEO_RFID_2)
+            self._led.set_sensor_color("RFID_2")
+
+        else:
+            # ── Both inactive / IDLE ─────────────────────────────────────
+            log.info("RFID: ninguno activo — volviendo al loop")
+            self._video.request(VIDEO_LOOP)
+            self._led.set_idle()
+
+    # ------------------------------------------------------------------
+    # Other sensor handlers
+    # ------------------------------------------------------------------
+
+    def _handle_push_button(self, line: str) -> None:
+        if line == "X001A[17]":
+            self._video.request(VIDEO_PUSH_BUTTON1)
+            self._led.set_sensor_color("PUSH_BTN_1")
+        elif line == "X001A[3]":
+            self._video.request(VIDEO_PUSH_BUTTON2)
+            self._led.set_sensor_color("PUSH_BTN_2")
+
+    def _handle_rotary(self, line: str) -> None:
+        """Parse Dr=XX, update video and LED (color + dynamic brightness)."""
+        try:
+            value = int(line.split("Dr=")[1].rstrip("]"))
+        except (IndexError, ValueError):
+            log.warning(f"Rotary: no se pudo parsear '{line}'")
+            return
+
+        if 1 <= value <= 10:
+            self._video.request(VIDEO_LEFT)
+        elif 11 <= value <= 20:
+            self._video.request(VIDEO_RIGHT)
+
+        self._led.apply_rotary(value)
+
+    def _handle_magnetic(self, line: str) -> None:
+        # X003A[3] = contact  |  X003A[4] = release — only react to contact
+        if line == "X003A[3]":
+            log.info(f"Magnetic  >> {line}")
+            self._video.request(VIDEO_MAGNETIC_SENSOR)
+            self._led.set_sensor_color("MAGNETIC")
+
+    def _handle_airbutton(self, line: str) -> None:
+        if line == "X004B[Bs=FAR]":
+            self._video.request(VIDEO_FAR)
+            self._led.set_sensor_color("AIRBUTTON_FAR")
+        elif line == "X004B[Bs=NEAR]":
+            self._video.request(VIDEO_CLOSE)
+            self._led.set_sensor_color("AIRBUTTON_NEAR")
+
+    def _handle_presence(self, line: str) -> None:
+        if line == "X005B[Dz=AB]":
+            self._video.request(VIDEO_PRESENCE_SENSOR)
+            self._led.set_sensor_color("PRESENCE")
+
+
+# ===========================================================================
+# AppController — orchestrator
+# ===========================================================================
+class AppController:
+    """Wires all sub-controllers together and manages thread lifecycle."""
+
+    def __init__(self) -> None:
+        self._stop  = threading.Event()
+        self._led   = LedController()
+
+        # Pass the LED idle callback so VideoController automatically
+        # resets the LED whenever any sensor clip ends and the loop resumes.
+        self._video = VideoController(
+            stop_event=self._stop,
+            on_loop_return=self._led.set_idle,
+        )
+
+        self._serial = SerialController(
+            stop_event=self._stop,
+            video_ctrl=self._video,
+            led_ctrl=self._led,
+        )
+
+    def run(self) -> None:
+        serial_thread = threading.Thread(
+            target=self._serial.run,
+            name="SerialThread",
+            daemon=True,
+        )
+        video_thread = threading.Thread(
+            target=self._video.run,
+            name="VideoThread",
+            daemon=True,
+        )
+
+        serial_thread.start()
+        video_thread.start()
+
+        try:
+            # Keep main thread alive; Ctrl+C raises KeyboardInterrupt here
+            while not self._stop.is_set():
+                serial_thread.join(timeout=0.5)
+                if not serial_thread.is_alive():
+                    break
+        except KeyboardInterrupt:
+            log.info("Ctrl+C detectado — cerrando...")
+            self._stop.set()
+        finally:
+            serial_thread.join(timeout=2)
+            video_thread.join(timeout=2)
+            log.info("Aplicación cerrada correctamente.")
+
+
+# ===========================================================================
+# Entry point
+# ===========================================================================
 if __name__ == "__main__":
-    serial_thread = threading.Thread(target=read_serial, args=(puerto, baudrate))
-    video_thread = threading.Thread(target=play_videos)
-
-    serial_thread.start()
-    video_thread.start()
-
-    serial_thread.join()
-    video_thread.join()
+    try:
+        AppController().run()
+    except KeyboardInterrupt:
+        pass
+    sys.exit(0)
