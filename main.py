@@ -15,6 +15,7 @@ Hardware layout:
 
 import os
 import sys
+import queue
 import logging
 import threading
 from typing import Callable, NamedTuple
@@ -340,14 +341,25 @@ class LedController:
 # ===========================================================================
 class VideoController:
     """
-    Full-screen OpenCV video playback.
+    Full-screen OpenCV video playback — optimized for immediate response.
 
-    - Loops VIDEO_LOOP by default.
-    - Any sensor can request a different video; it plays once, then
-      returns to the loop automatically.
-    - Thread-safe: video changes are posted via request() from any thread.
-    - Calls on_loop_return() whenever a clip ends and the player
-      transitions back to the idle loop (used to reset the LED to idle).
+    Architecture
+    ────────────
+    - request() enqueues a path AND fires a wakeup Event.
+    - The playback loop waits between frames using Event.wait(timeout)
+      instead of cv2.waitKey(ms).  This means a new request interrupts
+      the inter-frame sleep immediately (microsecond latency), rather than
+      waiting up to one full frame interval (25-33 ms) before reacting.
+    - cv2.waitKey(1) is still called every frame to pump the GUI event
+      queue (required by OpenCV's window system).
+    - Frame rate is derived from the video's own FPS metadata so every
+      clip plays at its correct speed.
+
+    Latency model
+    ─────────────
+    Old design  : up to waitKey(25) ms = ~25 ms per frame before reacting
+    New design  : Event.wait() interrupted by wakeup.set() in < 1 ms
+                  + cap.release() + VideoCapture() open time (~50-100 ms)
     """
 
     def __init__(
@@ -357,17 +369,55 @@ class VideoController:
     ) -> None:
         self._stop           = stop_event
         self._on_loop_return = on_loop_return
-        self._lock           = threading.Lock()
-        self._next: str | None = None
+        # Queue holds at most the latest pending path; older requests are
+        # discarded — we only care about the most recent state.
+        self._queue  = queue.Queue()
+        # Wakeup event: set by request() to interrupt the inter-frame sleep
+        # and force the loop to check for a new path immediately.
+        self._wakeup = threading.Event()
 
     def request(self, path: str) -> None:
-        """Request a video change (thread-safe, non-blocking)."""
-        print(f"[VIDEO] request() llamado con: {path}")
+        """
+        Request an immediate video switch (thread-safe, non-blocking).
+
+        Drains any previous pending request so the video thread always
+        picks up the latest state, never a stale intermediate value.
+        Fires _wakeup to interrupt the current inter-frame sleep.
+        """
+        print(f"[VIDEO] request() → {path}")
         if not os.path.exists(path):
-            print(f"[VIDEO] ADVERTENCIA: el archivo NO existe → {path}")
-        with self._lock:
-            self._next = path
-        print(f"[VIDEO] _next asignado a: {path}")
+            print(f"[VIDEO] ADVERTENCIA: archivo no existe → {path}")
+
+        # Drain stale pending requests
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+
+        self._queue.put_nowait(path)
+        self._wakeup.set()   # ← wake up video thread NOW
+
+    def _get_pending(self) -> str | None:
+        """Drain the queue and return the latest path, or None."""
+        latest = None
+        while True:
+            try:
+                latest = self._queue.get_nowait()
+            except queue.Empty:
+                break
+        return latest
+
+    def _open(self, path: str) -> tuple[cv2.VideoCapture, float]:
+        """Open a VideoCapture and return (cap, frame_interval_seconds)."""
+        cap = cv2.VideoCapture(path)
+        if not cap.isOpened():
+            print(f"[VIDEO] ERROR: no se pudo abrir → {path}")
+            return cap, 1.0 / 30.0
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0:
+            fps = 30.0
+        return cap, 1.0 / fps
 
     def run(self) -> None:
         if not os.path.exists(VIDEO_LOOP):
@@ -376,7 +426,7 @@ class VideoController:
             self._stop.set()
             return
 
-        cap = cv2.VideoCapture(VIDEO_LOOP)
+        cap, frame_interval = self._open(VIDEO_LOOP)
         if not cap.isOpened():
             log.error(f"No se pudo abrir el video de loop: {VIDEO_LOOP}")
             self._stop.set()
@@ -386,54 +436,62 @@ class VideoController:
         cv2.setWindowProperty("Video", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
         current = VIDEO_LOOP
-        print(f"[VIDEO] Iniciando con loop: {current}")
+        print(f"[VIDEO] Iniciando: {current}  ({1/frame_interval:.1f} fps)")
 
         while not self._stop.is_set():
-            # Apply pending video change if any
-            with self._lock:
-                pending = self._next
 
-            if pending is not None and pending != current:
-                print(f"[VIDEO] Detectado cambio pendiente: {current} → {pending}")
-                if not os.path.exists(pending):
-                    print(f"[VIDEO] ERROR: archivo no existe, ignorando cambio → {pending}")
-                    with self._lock:
-                        self._next = None
+            # ── PRIORIDAD 1: cambio de video inmediato ─────────────────
+            # Wakeup was set by request() — check queue before anything else.
+            next_path = self._get_pending()
+            if next_path is not None and next_path != current:
+                print(f"[VIDEO] CAMBIO INMEDIATO: {current} → {next_path}")
+                log.info(f"Reproduciendo: {next_path}")
+                cap.release()
+                current = next_path
+                cap, frame_interval = self._open(current)
+                if not cap.isOpened():
+                    current = VIDEO_LOOP
+                    cap, frame_interval = self._open(VIDEO_LOOP)
                 else:
-                    with self._lock:
-                        self._next = None
-                    current = pending
-                    cap.release()
-                    cap = cv2.VideoCapture(current)
-                    if not cap.isOpened():
-                        print(f"[VIDEO] ERROR: cv2 no pudo abrir → {current}")
-                        current = VIDEO_LOOP
-                        cap = cv2.VideoCapture(VIDEO_LOOP)
-                    else:
-                        print(f"[VIDEO] REPRODUCIENDO: {current}")
-                        log.info(f"Reproduciendo: {current}")
+                    print(f"[VIDEO] REPRODUCIENDO: {current}  ({1/frame_interval:.1f} fps)")
 
+            # ── Leer frame ─────────────────────────────────────────────
             ret, frame = cap.read()
 
             if not ret:
-                # End of clip — return to loop, or re-loop if already looping
+                # End of clip — back to loop (or restart loop)
                 if current != VIDEO_LOOP:
-                    print(f"[VIDEO] Fin de clip, volviendo al loop desde: {current}")
+                    print(f"[VIDEO] Fin de clip → loop")
                     log.info("Fin de clip, volviendo al loop.")
-                    current = VIDEO_LOOP
                     cap.release()
-                    cap = cv2.VideoCapture(VIDEO_LOOP)
+                    current = VIDEO_LOOP
+                    cap, frame_interval = self._open(VIDEO_LOOP)
                     if self._on_loop_return is not None:
                         self._on_loop_return()
                 else:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
 
+            # ── Mostrar frame ──────────────────────────────────────────
             cv2.imshow("Video", frame)
 
-            if cv2.waitKey(25) & 0xFF == ord("q"):
+            # cv2.waitKey(1): minimum call required to pump OpenCV's GUI
+            # event queue (window display, keyboard detection).
+            # Does NOT control frame rate — that is handled by Event.wait below.
+            if cv2.waitKey(1) & 0xFF == ord("q"):
                 self._stop.set()
                 break
+
+            # ── Control de FPS + espera interrumpible ──────────────────
+            # Sleep for the remainder of the frame interval.
+            # If request() fires during this sleep, _wakeup.set() wakes
+            # us up immediately — no waiting for the next frame boundary.
+            self._wakeup.clear()
+            sleep_time = frame_interval - 0.001   # 1 ms headroom for overhead
+            if sleep_time > 0:
+                self._wakeup.wait(timeout=sleep_time)
+            # If wakeup was set, _get_pending() at the top will pick up the
+            # new request on the very next iteration.
 
         cap.release()
         cv2.destroyAllWindows()
