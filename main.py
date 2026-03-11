@@ -13,6 +13,7 @@ Hardware layout:
   X-talk 008 | XW-L56    X-Wave LED (5 LEDs)
 """
 
+import os
 import sys
 import logging
 import threading
@@ -361,10 +362,20 @@ class VideoController:
 
     def request(self, path: str) -> None:
         """Request a video change (thread-safe, non-blocking)."""
+        print(f"[VIDEO] request() llamado con: {path}")
+        if not os.path.exists(path):
+            print(f"[VIDEO] ADVERTENCIA: el archivo NO existe → {path}")
         with self._lock:
             self._next = path
+        print(f"[VIDEO] _next asignado a: {path}")
 
     def run(self) -> None:
+        if not os.path.exists(VIDEO_LOOP):
+            print(f"[VIDEO] ERROR CRITICO: loop no existe → {VIDEO_LOOP}")
+            log.error(f"No se pudo abrir el video de loop: {VIDEO_LOOP}")
+            self._stop.set()
+            return
+
         cap = cv2.VideoCapture(VIDEO_LOOP)
         if not cap.isOpened():
             log.error(f"No se pudo abrir el video de loop: {VIDEO_LOOP}")
@@ -375,22 +386,39 @@ class VideoController:
         cv2.setWindowProperty("Video", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
         current = VIDEO_LOOP
+        print(f"[VIDEO] Iniciando con loop: {current}")
 
         while not self._stop.is_set():
             # Apply pending video change if any
             with self._lock:
-                if self._next is not None and self._next != current:
-                    current    = self._next
-                    self._next = None
+                pending = self._next
+
+            if pending is not None and pending != current:
+                print(f"[VIDEO] Detectado cambio pendiente: {current} → {pending}")
+                if not os.path.exists(pending):
+                    print(f"[VIDEO] ERROR: archivo no existe, ignorando cambio → {pending}")
+                    with self._lock:
+                        self._next = None
+                else:
+                    with self._lock:
+                        self._next = None
+                    current = pending
                     cap.release()
                     cap = cv2.VideoCapture(current)
-                    log.info(f"Reproduciendo: {current}")
+                    if not cap.isOpened():
+                        print(f"[VIDEO] ERROR: cv2 no pudo abrir → {current}")
+                        current = VIDEO_LOOP
+                        cap = cv2.VideoCapture(VIDEO_LOOP)
+                    else:
+                        print(f"[VIDEO] REPRODUCIENDO: {current}")
+                        log.info(f"Reproduciendo: {current}")
 
             ret, frame = cap.read()
 
             if not ret:
                 # End of clip — return to loop, or re-loop if already looping
                 if current != VIDEO_LOOP:
+                    print(f"[VIDEO] Fin de clip, volviendo al loop desde: {current}")
                     log.info("Fin de clip, volviendo al loop.")
                     current = VIDEO_LOOP
                     cap.release()
@@ -512,7 +540,11 @@ class SerialController:
                 if self._ser.in_waiting > 0:
                     raw = self._ser.readline().decode(errors="ignore").strip()
                     if raw:
-                        self._dispatch(raw)
+                        # Sanitize: remove all non-printable characters that
+                        # strip() does not catch (e.g. \x00, \x01, etc.)
+                        raw = "".join(c for c in raw if c.isprintable())
+                        if raw:
+                            self._dispatch(raw)
 
         except serial.SerialException as e:
             log.error(f"Error en puerto serial: {e}")
@@ -577,25 +609,42 @@ class SerialController:
           XR[P0000] → clear all flags
           (Adjust below for dual-reader installations)
         """
+        # Extra safety: strip again and sanitize in case something slipped through
+        line = line.strip()
+
+        print(f"[RFID] _handle_rfid llamado con: repr={repr(line)}")
+
         prev1, prev2 = self._rfid1, self._rfid2
 
         if line == "XR[PU001]":
+            print("[RFID] Match: XR[PU001] → rfid1 = True")
             self._rfid1 = True
         elif line == "XR[PU002]":
+            print("[RFID] Match: XR[PU002] → rfid2 = True")
             self._rfid2 = True
+        elif line == "XR[PB001]":
+            # Tag 1 removed from reader
+            print("[RFID] Match: XR[PB001] → rfid1 = False")
+            self._rfid1 = False
+        elif line == "XR[PB002]":
+            # Tag 2 removed from reader
+            print("[RFID] Match: XR[PB002] → rfid2 = False")
+            self._rfid2 = False
         elif line == "XR[P0000]":
-            # No tag present — clear whichever flags are active.
-            # NOTE for dual-reader setups: if reader 1 and reader 2 send
-            # separate "no tag" messages, split this into two conditions
-            # that only clear the corresponding flag (e.g. rfid1=False or
-            # rfid2=False), leaving the other flag untouched.
+            # Fallback: clear all flags (single-reader removal)
+            print("[RFID] Match: XR[P0000] → limpiando ambos flags")
             self._rfid1 = False
             self._rfid2 = False
         else:
+            print(f"[RFID] NO MATCH para: repr={repr(line)} — ignorado")
             return  # Unrecognised RFID message — ignore
+
+        print(f"[RFID] Estado anterior → rfid1: {prev1}, rfid2: {prev2}")
+        print(f"[RFID] Estado nuevo    → rfid1: {self._rfid1}, rfid2: {self._rfid2}")
 
         # Skip resolution if state did not actually change
         if self._rfid1 == prev1 and self._rfid2 == prev2:
+            print("[RFID] Estado sin cambio — omitiendo resolución")
             return
 
         self._resolve_rfid_state(prev1, prev2)
@@ -608,6 +657,8 @@ class SerialController:
         Called only when the state has actually changed.
         """
         now1, now2 = self._rfid1, self._rfid2
+
+        print(f"[RFID] _resolve_rfid_state → now1={now1}, now2={now2}, prev1={prev1}, prev2={prev2}")
         log.info(
             f"RFID estado: PU001={'ON ' if now1 else 'OFF'} | "
             f"PU002={'ON ' if now2 else 'OFF'}"
@@ -617,32 +668,44 @@ class SerialController:
             # ── BOTH active ──────────────────────────────────────────────
             if prev1 and not prev2:
                 # Was ONLY1, PU002 just arrived → Coca+Sprite transition
+                video_name = VIDEO_RFID_1_2
+                print(f"[RFID] Transición PU001→PU001+PU002 | VIDEO CAMBIADO A: {video_name}")
                 log.info("RFID transición: PU001 → PU001+PU002")
-                self._video.request(VIDEO_RFID_1_2)
+                self._video.request(video_name)
                 self._led.set_sensor_color("RFID_2")   # color of arriving tag
             elif prev2 and not prev1:
                 # Was ONLY2, PU001 just arrived → Sprite+Coca transition
+                video_name = VIDEO_RFID_2_1
+                print(f"[RFID] Transición PU002→PU001+PU002 | VIDEO CAMBIADO A: {video_name}")
                 log.info("RFID transición: PU002 → PU001+PU002")
-                self._video.request(VIDEO_RFID_2_1)
+                self._video.request(video_name)
                 self._led.set_sensor_color("RFID_1")   # color of arriving tag
+            else:
+                print("[RFID] Ya ambos activos — manteniendo video actual")
             # else: already BOTH — maintain current video, no change
 
         elif now1 and not now2:
             # ── Only PU001 ───────────────────────────────────────────────
+            video_name = VIDEO_RFID_1
+            print(f"[RFID] Solo PU001 activo | VIDEO CAMBIADO A: {video_name}")
             log.info("RFID: solo PU001 activo")
-            self._video.request(VIDEO_RFID_1)
+            self._video.request(video_name)
             self._led.set_sensor_color("RFID_1")
 
         elif now2 and not now1:
             # ── Only PU002 ───────────────────────────────────────────────
+            video_name = VIDEO_RFID_2
+            print(f"[RFID] Solo PU002 activo | VIDEO CAMBIADO A: {video_name}")
             log.info("RFID: solo PU002 activo")
-            self._video.request(VIDEO_RFID_2)
+            self._video.request(video_name)
             self._led.set_sensor_color("RFID_2")
 
         else:
             # ── Both inactive / IDLE ─────────────────────────────────────
+            video_name = VIDEO_LOOP
+            print(f"[RFID] Ninguno activo — volviendo al loop | VIDEO CAMBIADO A: {video_name}")
             log.info("RFID: ninguno activo — volviendo al loop")
-            self._video.request(VIDEO_LOOP)
+            self._video.request(video_name)
             self._led.set_idle()
 
     # ------------------------------------------------------------------
