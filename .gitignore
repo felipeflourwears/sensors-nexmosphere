@@ -1,10 +1,21 @@
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Python
 __pycache__/
-# Videos
+*.py[cod]
+
+# Sets de videos específicos de cada instalación (no se versionan)
 lala/
 colgate/
+femsa/
 
 # Documentation PDFs
 documentacion/
 
-# Windows trash
+# Basura de Windows / macOS
 *.Zone.Identifier
+Thumbs.db
+.DS_Store
