@@ -12,7 +12,34 @@ que corresponda a cada sensor.
 
 ---
 
-## Instalación
+## Arranque rápido (un clic)
+
+Lo único que necesitas es tener Python instalado.
+
+- **Windows** → doble clic en **`iniciar.bat`**
+- **Linux** → doble clic en **`iniciar.sh`** (o `./iniciar.sh` en la terminal)
+
+La primera vez crea el entorno virtual e instala las dependencias solo; las
+siguientes arranca directo. Si el entorno existe pero le faltan paquetes,
+también los instala. Para forzar un puerto concreto:
+
+```
+iniciar.bat COM3            (Windows)
+./iniciar.sh /dev/ttyUSB0   (Linux)
+```
+
+Si algo falla, la ventana **no se cierra**: deja el error en pantalla con las
+causas más probables.
+
+En Linux, si al hacer doble clic no arranca, marca el archivo como ejecutable
+(clic derecho → Propiedades → Permisos → *Permitir ejecutar*) o desde terminal:
+`chmod +x iniciar.sh`
+
+El resto de esta sección es la instalación manual, por si la prefieres.
+
+---
+
+## Instalación manual
 
 Requiere **Python 3.8 o superior** (probado en 3.12).
 
