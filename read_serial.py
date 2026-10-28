@@ -1,15 +1,16 @@
 import serial
 
 # Configuración del puerto serial
-puerto = "COM3"       # En Windows sería COM3, COM4, etc.
+#PORT = "COM3"       # En Windows sería COM3, COM4, etc.
+PORT = "/dev/ttyUSB0"
 baudrate = 115200     # Velocidad de transmisión
 
 try:
-    ser = serial.Serial(puerto, baudrate, timeout=1)
-    print(f" Escuchando en {puerto} a {baudrate} baudios...\n")
+    ser = serial.Serial(PORT, baudrate, timeout=1)
+    print(f"Listening {PORT} at {baudrate} bauds...\n")
 
     while True:
-        if ser.in_waiting > 0:  # Si hay datos en el buffer
+        if ser.in_waiting > 0:
             linea = ser.readline().decode(errors='ignore').strip()
             if linea:
             #if linea.startswith("XR"):
@@ -17,10 +18,10 @@ try:
             
 
 except serial.SerialException as e:
-    print(f"Error al abrir el puerto: {e}")
+    print(f"Error to open port {e}")
 except KeyboardInterrupt:
-    print("\nLectura detenida por el usuario.")
+    print("Exiting...")
 finally:
     if 'ser' in locals() and ser.is_open:
         ser.close()
-        print("Puerto cerrado.")
+        print("Port closed.")
