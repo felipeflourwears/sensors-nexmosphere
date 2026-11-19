@@ -1,11 +1,11 @@
-
 import sys
 import serial
+import serial.tools.list_ports
 
 IS_WINDOWS = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
 
-import demo.models.ModelSignals as modelSignals
+import models.ModelSignals as modelSignals
 
 CHIPS_USB_SERIAL = (
     ("prolific", 0),
@@ -115,7 +115,6 @@ def open_port(forced=None):
 
 
 def read_serial(ser, stop_event, app_state):
-    state = {"ultimo_pickup": None, "rfid_pendiente": False}
     try:
         while not stop_event.is_set():
             try:
@@ -124,7 +123,7 @@ def read_serial(ser, stop_event, app_state):
                 print(f"Lost serial connection: {e}")
                 break
             if line:
-                modelSignals.process_line(line, state, app_state)
+                modelSignals.process_line(line, app_state)
     finally:
         if ser.is_open:
             ser.close()
@@ -133,7 +132,6 @@ def read_serial(ser, stop_event, app_state):
 def initiate():
     print("Initializing serial handler...")
     forced = sys.argv[1] if len(sys.argv) > 1 else FIXED_PORT
-    
     ser = open_port(forced)
     if ser is None:
         sys.exit(1)
