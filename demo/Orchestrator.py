@@ -17,7 +17,6 @@ import sys
 import threading
 import time
 
-
 if sys.platform.startswith("linux") and os.environ.get("WAYLAND_DISPLAY"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 

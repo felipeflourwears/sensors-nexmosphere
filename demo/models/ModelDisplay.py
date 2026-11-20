@@ -9,7 +9,7 @@ import subprocess
 import numpy as np
 
 video_lock = threading.Lock()
-video_to_play = cfg.LOOP
+video_to_play = (cfg.LOOP,)
 video_request = 0
 
 import constants as cts
@@ -202,14 +202,45 @@ def abrir_video(path):
     return cap, max(1, int(round(1000.0 / fps)))
 
 
+def liberar_caps(caps):
+    """Libera una lista de objetos cv2.VideoCapture."""
+    for cap in caps:
+        if cap is not None:
+            cap.release()
+
+
+def abrir_videos(paths):
+    """Abre de 1 a 4 videos simultáneos. Devuelve (caps, delay_ms) o None si falla."""
+    caps = []
+    min_delay = 40
+    for path in paths[:4]:
+        res = abrir_video(path)
+        if res is None:
+            liberar_caps(caps)
+            return None
+        cap, d = res
+        caps.append(cap)
+        min_delay = min(min_delay, d)
+    return caps, min_delay
+
+
 class Lienzo:
-    """Encaja cada frame en la pantalla según cfg.AJUSTE."""
+    """Encaja frames individuales o en cuadrícula (1, 2 o 4 secciones) según cfg.AJUSTE."""
 
     def __init__(self, pantalla, modo, color_fondo):
         self.pantalla = pantalla
         self.modo = modo
         self.color_fondo = color_fondo
         self.buffer = None
+        self._sublienzos = {}
+
+    def _sublienzo(self, ancho, alto):
+        clave = (ancho, alto)
+        sub = self._sublienzos.get(clave)
+        if sub is None:
+            sub = Lienzo(clave, self.modo, self.color_fondo)
+            self._sublienzos[clave] = sub
+        return sub
 
     def ajustar(self, frame):
         if self.pantalla is None:
@@ -226,6 +257,49 @@ class Lienzo:
         if self.modo == "cubrir":
             return self._cubrir(frame, ancho, alto)
         return self._contener(frame, ancho, alto)
+
+    def componer_mosaico(self, frames):
+        """Compone 1, 2 (lado a lado) o 3-4 (cuadrícula 2x2) frames en un solo lienzo."""
+        n = len(frames)
+        if n == 0:
+            return None
+        if n == 1:
+            return self.ajustar(frames[0])
+
+        ancho, alto = self.pantalla if self.pantalla else (
+            frames[0].shape[1], frames[0].shape[0]
+        )
+
+        if self.buffer is None or self.buffer.shape[:2] != (alto, ancho):
+            self.buffer = np.zeros((alto, ancho, 3), dtype=np.uint8)
+        else:
+            self.buffer.fill(0)
+
+        if n == 2:
+            # División vertical en 2 secciones (izquierda / derecha)
+            w_izq = ancho // 2
+            w_der = ancho - w_izq
+            self.buffer[:, :w_izq] = self._sublienzo(w_izq, alto).ajustar(frames[0])
+            self.buffer[:, w_izq:] = self._sublienzo(w_der, alto).ajustar(frames[1])
+            return self.buffer
+
+        # División en 4 secciones (cuadrícula 2x2) para 3 o 4 videos
+        w_izq = ancho // 2
+        w_der = ancho - w_izq
+        h_sup = alto // 2
+        h_inf = alto - h_sup
+
+        regiones = [
+            (0, 0, w_izq, h_sup),          # arriba-izquierda
+            (w_izq, 0, w_der, h_sup),      # arriba-derecha
+            (0, h_sup, w_izq, h_inf),      # abajo-izquierda
+            (w_izq, h_sup, w_der, h_inf),  # abajo-derecha
+        ]
+
+        for frame, (x, y, rw, rh) in zip(frames[:4], regiones):
+            self.buffer[y:y + rh, x:x + rw] = self._sublienzo(rw, rh).ajustar(frame)
+
+        return self.buffer
 
     def _cubrir(self, frame, ancho, alto):
         """Llena la pantalla y recorta el excedente por el centro. Sin barras."""
@@ -286,11 +360,37 @@ class Lienzo:
         return muestra.reshape(-1, 3).mean(axis=0).astype(np.uint8)
 
 
-def solicitar_video(path):
+def normalizar_fuentes(paths):
+    """Convierte str o secuencia de rutas en una tupla limpia de hasta 4 rutas."""
+    if not paths:
+        return ()
+    if isinstance(paths, str):
+        return (paths,) if paths else ()
+    return tuple(p for p in paths if p)[:4]
+
+
+def solicitar_video(paths):
+    """Solicita reproducir 1, 2 o 4 videos (o una imagen). Thread-safe."""
     global video_to_play, video_request
+    fuentes = normalizar_fuentes(paths)
+    if not fuentes:
+        return
     with video_lock:
-        video_to_play = path
+        video_to_play = fuentes
         video_request += 1
+
+
+def _buscar_video(diccionario, clave):
+    """Busca clave en diccionario soportando tanto int como str."""
+    if clave in diccionario:
+        return diccionario[clave]
+    try:
+        clave_int = int(clave)
+        if clave_int in diccionario:
+            return diccionario[clave_int]
+    except (TypeError, ValueError):
+        pass
+    return diccionario.get(str(clave), "")
 
 
 def elegir_video(sensor, value):
@@ -300,50 +400,63 @@ def elegir_video(sensor, value):
 
     if sensor != cts.ROTARY_BUTTON:
         current_rotation = None
+    if sensor != cts.RFID_TAG:
+        current_rfid_stack = []
 
     match sensor:
         case cts.PUSH_BUTTON:
-            return sensor_clave.get("videos", {}).get(str(value), "")
+            return _buscar_video(sensor_clave.get("videos", {}), value)
 
         case cts.ROTARY_BUTTON:
-            value = int(value)
-            if value == current_rotation:
+            try:
+                idx = int(value)
+            except (TypeError, ValueError):
                 return ""
-            current_rotation = value
-            return sensor_clave.get("videos", {}).get(value, "")
+            if idx == current_rotation:
+                return ""
+            current_rotation = idx
+            return _buscar_video(sensor_clave.get("videos", {}), idx)
 
         case cts.MAGNETIC_PICK_UP_SENSOR:
-            return sensor_clave.get("videos", {}).get(value, "")
+            return _buscar_video(sensor_clave.get("videos", {}), value)
 
         case cts.AIR_BUTTON:
-            return sensor_clave.get("videos", {}).get(value, "")
+            return _buscar_video(sensor_clave.get("videos", {}), value)
 
         case cts.PRESENCE_SENSOR:
-            return sensor_clave.get("videos", {}).get(value, "")
+            return _buscar_video(sensor_clave.get("videos", {}), value)
 
         case cts.LIGHT_SENSOR:
             return ""
 
         case cts.RFID_TAG:
-            len_rfids = len(value)
+            rfids = list(value)
+            if rfids == current_rfid_stack:
+                return ()
+            current_rfid_stack = rfids
 
+            len_rfids = len(rfids)
             if len_rfids == 0:
-                return ("")
+                return ()
+
             videos_rfid = sensor_clave.get("videos", {})
-            if len_rfids == 1:
-                return (videos_rfid.get(value[0], ""))
-            elif len_rfids == 2:
-                return (videos_rfid.get(value[0], ""), videos_rfid.get(value[1], ""))
-            elif len_rfids == 3:
-                return (videos_rfid.get(value[1], ""), videos_rfid.get(value[2], ""))
-            elif len_rfids == 4:
-                return (videos_rfid.get(value[0], ""), videos_rfid.get(value[1], ""), videos_rfid.get(value[2], ""), videos_rfid.get(value[3], ""))
-            else:
-                return ("")
+
+            routes = []
+
+            for tag in rfids:
+                route = _buscar_video(videos_rfid, tag)
+                if route:
+                    routes.append(route)
+            if len(routes) == 3:
+                routes.pop(0)
+
+            return routes
+
+    return ""
 
 
 def play_videos(stop_event, app_state):
-    global current_video, current_rotation
+    global current_video, current_rotation, current_rfid_stack
 
     monitor = elegir_monitor(cfg.MONITOR)
     crear_ventana_kiosko(monitor)
@@ -353,7 +466,7 @@ def play_videos(stop_event, app_state):
         print(f"Ajustando video a {pantalla[0]}x{pantalla[1]} (modo '{cfg.AJUSTE}')")
     lienzo = Lienzo(pantalla, cfg.AJUSTE, cfg.COLOR_FONDO)
 
-    cap = None
+    caps = []
     imagen_actual = None
     inicio_imagen = None
     cache_imagenes = {}
@@ -362,85 +475,100 @@ def play_videos(stop_event, app_state):
     delay = 40
     fallos_loop = 0
     frames = 0
+    loop_fuentes = normalizar_fuentes(cfg.LOOP)
 
     try:
         while not stop_event.is_set():
             if app_state.get_updated():
                 sensor, value = app_state.get_status()
                 path = elegir_video(sensor, value)
-                print("path: ", path)
                 if path:
                     solicitar_video(path)
             elif app_state.get_updated_rfids():
                 rfids = app_state.get_rfids()
                 paths = elegir_video(cts.RFID_TAG, rfids)
-                if paths[0] != "":
-                    solicitar_video(paths) # TODO adapt the code to allow for multiple video split screen, 1, 2 and 4 sections.
+                if paths:
+                    solicitar_video(paths)
 
             with video_lock:
                 deseado, request = video_to_play, video_request
 
-            # Cambio de medio (video o imagen)
+            # Cambio de medio (imagen única o 1/2/4 videos)
             if deseado != current_video or request != current_request:
-                if es_imagen(deseado):
-                    img = cache_imagenes.get(deseado)
+                if len(deseado) == 1 and es_imagen(deseado[0]):
+                    ruta_img = deseado[0]
+                    img = cache_imagenes.get(ruta_img)
                     if img is None:
-                        img = cargar_imagen(deseado)
+                        img = cargar_imagen(ruta_img)
                         if img is not None:
-                            cache_imagenes[deseado] = img
+                            cache_imagenes[ruta_img] = img
 
                     if img is None:
-                        if deseado != cfg.LOOP:
+                        if deseado != loop_fuentes:
                             solicitar_video(cfg.LOOP)
                             continue
                         break
 
-                    if cap is not None:
-                        cap.release()
-                        cap = None
+                    liberar_caps(caps)
+                    caps = []
 
                     imagen_actual = img
                     inicio_imagen = time.monotonic()
                     current_video, current_request = deseado, request
-                    delay = 30  # refresco rápido para responder sin latencia al giro del rotary
+                    delay = 30
                 else:
-                    nuevo = abrir_video(deseado)
+                    nuevo = abrir_videos(deseado)
                     if nuevo is None:
-                        if deseado != cfg.LOOP:
+                        if deseado != loop_fuentes:
                             solicitar_video(cfg.LOOP)
                             continue
                         print("No se pudo abrir el video de loop. Cerrando.")
                         break
-                    if cap is not None:
-                        cap.release()
-                    cap, delay = nuevo
+                    liberar_caps(caps)
+                    caps, delay = nuevo
                     imagen_actual = None
                     inicio_imagen = None
                     current_video, current_request = deseado, request
                     fallos_loop = 0
 
-            # Obtención del frame actual (imagen estática vs video)
+            # Obtención y composición del frame actual
             if imagen_actual is not None:
                 if (time.monotonic() - inicio_imagen) >= TIEMPO_INACTIVIDAD_IMAGEN:
                     current_rotation = None
                     solicitar_video(cfg.LOOP)
                     continue
-                frame = imagen_actual
+                frame_salida = lienzo.ajustar(imagen_actual)
             else:
-                ret, frame = cap.read()
-                if not ret:
-                    if current_video != cfg.LOOP:
+                es_loop = (current_video == loop_fuentes)
+                frames_leidos = []
+                alguno_termino = False
+
+                for cap in caps:
+                    ret, f = cap.read()
+                    if not ret:
+                        if not es_loop:
+                            alguno_termino = True
+                            break
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        ret, f = cap.read()
+                        if not ret:
+                            alguno_termino = True
+                            break
+                    frames_leidos.append(f)
+
+                if alguno_termino:
+                    if not es_loop:
+                        current_rfid_stack = []
                         solicitar_video(cfg.LOOP)
                         continue
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    ret, frame = cap.read()
-                    if not ret:
-                        fallos_loop += 1
-                        if fallos_loop >= 3:
-                            print("No se pueden leer frames del video de loop. Cerrando.")
-                            break
-                        continue
-                    fallos_loop = 0
+                    fallos_loop += 1
+                    if fallos_loop >= 3:
+                        print("No se pueden leer frames del video de loop. Cerrando.")
+                        break
+                    continue
+
+                fallos_loop = 0
+                frame_salida = lienzo.componer_mosaico(frames_leidos)
 
             frames += 1
             if frames % 50 == 0:
@@ -449,7 +577,8 @@ def play_videos(stop_event, app_state):
                     print(f"Pantalla cambió a {real[0]}x{real[1]}, reajustando.")
                     lienzo = Lienzo(real, cfg.AJUSTE, cfg.COLOR_FONDO)
 
-            cv2.imshow(VENTANA, lienzo.ajustar(frame))
+            if frame_salida is not None:
+                cv2.imshow(VENTANA, frame_salida)
 
             key = cv2.waitKey(delay) & 0xFF
             if key == ord("q") or key == 27:
@@ -457,7 +586,6 @@ def play_videos(stop_event, app_state):
             if ventana_cerrada():
                 break
     finally:
-        if cap is not None:
-            cap.release()
+        liberar_caps(caps)
         cv2.destroyAllWindows()
         stop_event.set()

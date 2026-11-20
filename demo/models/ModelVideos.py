@@ -6,18 +6,10 @@ VIDEO_DIR = os.path.join(BASE_DIR, "videos")
 def v(name):
     return os.path.join(VIDEO_DIR, name)
 
-
 # Se reproduce en bucle mientras no haya ningún sensor activado, y es al que se
 # vuelve cuando termina el video de un trigger.
 LOOP = v("loop.mp4")
 
-# Segundos máximos entre dos pick-ups para considerarlos una combinación.
-RFID_COMBO_TIMEOUT = 3.0
-
-
-# ---------------------------------------------------------------------------
-# Resto de sensores: (dirección, canal) -> valor del mensaje -> video
-# ---------------------------------------------------------------------------
 SENSORS = {
     (cts.RFID_TAG): {
         "name": "RFID tags",
@@ -80,13 +72,6 @@ SENSORS = {
             20: v("rotary/20.png"),
         }
     }
-    #(cts.ROTARY_BUTTON): {
-    #    "name": "Botón de rotación",
-    #    "videos": {
-    #        cts.ROTARY_BUTTON_LEFT: v("left.mp4"),
-    #        cts.ROTARY_BUTTON_RIGHT: v("right.mp4"),
-    #    },
-    #}
 }
 
 # ---------------------------------------------------------------------------
@@ -103,46 +88,6 @@ ROTARY = {
         (11, 20, v("right.mp4")),
     ],
 }
-
-# ---------------------------------------------------------------------------
-# Pantalla (modo kiosko)
-# ---------------------------------------------------------------------------
-# Cómo encaja el video cuando su proporción NO coincide con la de la pantalla:
-#
-#   "cubrir"   -> llena toda la pantalla y recorta lo que sobra.
-#                 Sin barras. Es la mejor opción para kiosko.
-#   "contener" -> muestra el video completo y rellena el hueco con COLOR_FONDO.
-#   "estirar"  -> deforma el video hasta llenar la pantalla.
-#
-# Si el video y la pantalla tienen la misma resolución, esto no se aplica: el
-# frame se muestra tal cual.
-AJUSTE = "cubrir"
-
-# Relleno cuando AJUSTE = "contener".
-#   "auto" -> copia el color del borde del propio video, así se mezcla con
-#             fondos claros u oscuros sin que se note el corte.
-#   (B, G, R) -> color fijo. Ojo: OpenCV usa BGR, no RGB.
-#                (255, 255, 255) blanco · (0, 0, 0) negro
-COLOR_FONDO = "auto"
-
-# Monitor en el que se abre el kiosko. Opciones:
-#   "DP-3"    -> por nombre (el programa los lista al arrancar)
-#   0, 1, 2   -> por índice
-#   "auto"    -> el monitor primario del sistema
-#
-# En este equipo:
-#   "DP-3" -> 1920x1080, el monitor pequeño (coincide exacto con los videos)
-#   "DP-1" -> 2560x1080 ultrawide, es el primario
-MONITOR = "DP-3"
-
-# Posición manual, solo se usa si no se puede consultar la lista de monitores
-# (por ejemplo en Windows, donde no existe xrandr).
-MONITOR_X = 0
-MONITOR_Y = 0
-
-# Oculta el cursor del ratón sobre el video (útil en kiosko con pantalla táctil).
-OCULTAR_CURSOR = True
-
 
 def todos_los_videos():
     """Todas las rutas de video configuradas (para validarlas al arrancar)."""
