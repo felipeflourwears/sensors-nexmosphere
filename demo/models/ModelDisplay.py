@@ -1,30 +1,38 @@
 import os
-import cv2  # noqa: E402  (debe importarse después de fijar QT_QPA_PLATFORM)
+import time
+import cv2
 import re
-import ModelVideos as cfg  # noqa: E402
+import models.ModelVideos as cfg
 import sys
 import threading
 import subprocess
-import numpy as np  # noqa: E402
-stop_event = threading.Event()
+import numpy as np
+
 video_lock = threading.Lock()
 video_to_play = cfg.LOOP
-video_request = 0  # se incrementa en cada trigger para forzar el reinicio del video
+video_request = 0
 
+import constants as cts
+
+current_sensor = cts.NONE
+current_id = None
+
+current_rotation = None
+current_video = None
+
+current_rfid_stack = []
+
+# Grosor (px) de la franja del video que se muestrea para COLOR_FONDO = "auto".
+MUESTRA_BORDE = 8
+
+EXTENSIONES_IMAGEN = (".png", ".jpg", ".jpeg")
+TIEMPO_INACTIVIDAD_IMAGEN = 2.0  # segundos antes de volver a cfg.LOOP
 
 ES_WINDOWS = sys.platform.startswith("win")
 ES_MAC = sys.platform == "darwin"
 
 VENTANA = "Video"
 
-def solicitar_video(path, motivo=""):
-    """Pide reproducir un video. Thread-safe y siempre reinicia desde el frame 0."""
-    global video_to_play, video_request
-    with video_lock:
-        video_to_play = path
-        video_request += 1
-    if motivo:
-        print(f"   -> {motivo}: {os.path.basename(path)}")
 
 # ---------------------------------------------------------------------------
 # Reproducción en modo kiosko
@@ -40,7 +48,6 @@ def ocultar_cursor():
             stderr=subprocess.DEVNULL,
         )
     except (FileNotFoundError, OSError):
-        # unclutter no instalado: no es crítico, seguimos con el cursor visible.
         return None
 
 
@@ -108,12 +115,7 @@ def elegir_monitor(preferencia):
 
 
 def crear_ventana_kiosko(monitor):
-    """Crea la ventana en fullscreen sin decoración, en el monitor indicado.
-
-    WINDOW_GUI_NORMAL elimina la barra de herramientas, la barra de estado y el
-    menú contextual de OpenCV. Al pasar a fullscreen el gestor de ventanas deja
-    de dibujar la decoración, así que no hay botones de cerrar/minimizar/expandir.
-    """
+    """Crea la ventana en fullscreen sin decoración, en el monitor indicado."""
     cv2.namedWindow(VENTANA, cv2.WINDOW_GUI_NORMAL | cv2.WINDOW_NORMAL)
 
     if monitor is not None:
@@ -123,24 +125,16 @@ def crear_ventana_kiosko(monitor):
         destino_x, destino_y = cfg.MONITOR_X, cfg.MONITOR_Y
         ancho, alto = 1920, 1080
 
-    # La ventana no existe para el gestor de ventanas hasta el primer imshow:
-    # sin este frame previo, moveWindow se ignora y el kiosko acaba abriéndose
-    # en el monitor primario. El frame debe tener la proporción del monitor,
-    # porque Qt conserva la relación de aspecto de la imagen y getWindowImageRect
-    # devuelve el área de la IMAGEN, no de la ventana.
     cv2.imshow(VENTANA, np.zeros((alto, ancho, 3), dtype=np.uint8))
     cv2.waitKey(1)
 
     if monitor is not None:
         cv2.resizeWindow(VENTANA, ancho, alto)
 
-    # Colocamos la ventana dentro del monitor deseado ANTES del fullscreen: la
-    # mayoría de gestores hacen fullscreen en el monitor que contiene la ventana.
     cv2.moveWindow(VENTANA, destino_x, destino_y)
     cv2.waitKey(1)
 
     cv2.setWindowProperty(VENTANA, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    # Damos tiempo al gestor de ventanas a aplicar el cambio antes de medir.
     for _ in range(5):
         cv2.waitKey(20)
 
@@ -164,7 +158,6 @@ def geometria_destino(monitor):
 
     esperado = (monitor["ancho"], monitor["alto"])
     if real and real != esperado:
-        # El gestor de ventanas no hizo lo que pedimos: manda lo que hay en pantalla.
         print(f"AVISO: la ventana mide {real[0]}x{real[1]} pero "
               f"{monitor['nombre']} es {esperado[0]}x{esperado[1]}. Uso el tamaño real.")
         return real
@@ -177,6 +170,23 @@ def ventana_cerrada():
         return cv2.getWindowProperty(VENTANA, cv2.WND_PROP_VISIBLE) < 1
     except cv2.error:
         return True
+
+
+def es_imagen(path):
+    """True si la ruta corresponde a un archivo de imagen estática."""
+    return isinstance(path, str) and path.lower().endswith(EXTENSIONES_IMAGEN)
+
+
+def cargar_imagen(path):
+    """Carga una imagen BGR desde disco o devuelve None si falla."""
+    if not os.path.isfile(path):
+        print(f"Error: no existe la imagen '{path}'")
+        return None
+    img = cv2.imread(path, cv2.IMREAD_COLOR)
+    if img is None:
+        print(f"Error al decodificar la imagen '{path}'")
+        return None
+    return img
 
 
 def abrir_video(path):
@@ -192,10 +202,6 @@ def abrir_video(path):
     return cap, max(1, int(round(1000.0 / fps)))
 
 
-# Grosor (px) de la franja del video que se muestrea para COLOR_FONDO = "auto".
-MUESTRA_BORDE = 8
-
-
 class Lienzo:
     """Encaja cada frame en la pantalla según cfg.AJUSTE."""
 
@@ -207,16 +213,14 @@ class Lienzo:
 
     def ajustar(self, frame):
         if self.pantalla is None:
-            return frame  # sin tamaño conocido, que OpenCV haga lo que pueda
+            return frame
 
         ancho, alto = self.pantalla
         h, w = frame.shape[:2]
         if (w, h) == (ancho, alto):
-            return frame  # coincidencia exacta: nada que hacer
+            return frame
 
         if self.modo == "estirar":
-            # Deformamos nosotros hasta el tamaño exacto de la ventana. No vale
-            # dejárselo a OpenCV: Qt conserva la proporción y añadiría barras.
             return cv2.resize(frame, (ancho, alto), interpolation=cv2.INTER_AREA)
 
         if self.modo == "cubrir":
@@ -233,7 +237,6 @@ class Lienzo:
 
         x0 = (nuevo_w - ancho) // 2
         y0 = (nuevo_h - alto) // 2
-        # El recorte es una vista de numpy, no copia datos.
         return escalado[y0:y0 + alto, x0:x0 + ancho]
 
     def _contener(self, frame, ancho, alto):
@@ -253,11 +256,11 @@ class Lienzo:
         y0 = (alto - nuevo_h) // 2
         x0 = (ancho - nuevo_w) // 2
 
-        if x0 > 0:  # barras a los lados
+        if x0 > 0:
             izq, der = self._colores_laterales(escalado)
             self.buffer[:, :x0] = izq
             self.buffer[:, x0 + nuevo_w:] = der
-        if y0 > 0:  # barras arriba y abajo
+        if y0 > 0:
             arriba, abajo = self._colores_verticales(escalado)
             self.buffer[:y0] = arriba
             self.buffer[y0 + nuevo_h:] = abajo
@@ -283,7 +286,65 @@ class Lienzo:
         return muestra.reshape(-1, 3).mean(axis=0).astype(np.uint8)
 
 
-def play_videos():
+def solicitar_video(path):
+    global video_to_play, video_request
+    with video_lock:
+        video_to_play = path
+        video_request += 1
+
+
+def elegir_video(sensor, value):
+    sensor_clave = cfg.SENSORS.get(sensor) or {}
+    global current_rotation
+    global current_rfid_stack
+
+    if sensor != cts.ROTARY_BUTTON:
+        current_rotation = None
+
+    match sensor:
+        case cts.PUSH_BUTTON:
+            return sensor_clave.get("videos", {}).get(str(value), "")
+
+        case cts.ROTARY_BUTTON:
+            value = int(value)
+            if value == current_rotation:
+                return ""
+            current_rotation = value
+            return sensor_clave.get("videos", {}).get(value, "")
+
+        case cts.MAGNETIC_PICK_UP_SENSOR:
+            return sensor_clave.get("videos", {}).get(value, "")
+
+        case cts.AIR_BUTTON:
+            return sensor_clave.get("videos", {}).get(value, "")
+
+        case cts.PRESENCE_SENSOR:
+            return sensor_clave.get("videos", {}).get(value, "")
+
+        case cts.LIGHT_SENSOR:
+            return ""
+
+        case cts.RFID_TAG:
+            len_rfids = len(value)
+
+            if len_rfids == 0:
+                return ("")
+            videos_rfid = sensor_clave.get("videos", {})
+            if len_rfids == 1:
+                return (videos_rfid.get(value[0], ""))
+            elif len_rfids == 2:
+                return (videos_rfid.get(value[0], ""), videos_rfid.get(value[1], ""))
+            elif len_rfids == 3:
+                return (videos_rfid.get(value[1], ""), videos_rfid.get(value[2], ""))
+            elif len_rfids == 4:
+                return (videos_rfid.get(value[0], ""), videos_rfid.get(value[1], ""), videos_rfid.get(value[2], ""), videos_rfid.get(value[3], ""))
+            else:
+                return ("")
+
+
+def play_videos(stop_event, app_state):
+    global current_video, current_rotation
+
     monitor = elegir_monitor(cfg.MONITOR)
     crear_ventana_kiosko(monitor)
 
@@ -293,6 +354,9 @@ def play_videos():
     lienzo = Lienzo(pantalla, cfg.AJUSTE, cfg.COLOR_FONDO)
 
     cap = None
+    imagen_actual = None
+    inicio_imagen = None
+    cache_imagenes = {}
     current_video = None
     current_request = -1
     delay = 40
@@ -301,42 +365,83 @@ def play_videos():
 
     try:
         while not stop_event.is_set():
+            if app_state.get_updated():
+                sensor, value = app_state.get_status()
+                path = elegir_video(sensor, value)
+                print("path: ", path)
+                if path:
+                    solicitar_video(path)
+            elif app_state.get_updated_rfids():
+                rfids = app_state.get_rfids()
+                paths = elegir_video(cts.RFID_TAG, rfids)
+                if paths[0] != "":
+                    solicitar_video(paths) # TODO adapt the code to allow for multiple video split screen, 1, 2 and 4 sections.
+
             with video_lock:
                 deseado, request = video_to_play, video_request
 
-            if cap is None or deseado != current_video or request != current_request:
-                nuevo = abrir_video(deseado)
-                if nuevo is None:
-                    if deseado != cfg.LOOP:
-                        solicitar_video(cfg.LOOP, "fallback")
-                        continue
-                    print("No se pudo abrir el video de loop. Cerrando.")
-                    break
-                if cap is not None:
-                    cap.release()
-                cap, delay = nuevo
-                current_video, current_request = deseado, request
-                fallos_loop = 0
+            # Cambio de medio (video o imagen)
+            if deseado != current_video or request != current_request:
+                if es_imagen(deseado):
+                    img = cache_imagenes.get(deseado)
+                    if img is None:
+                        img = cargar_imagen(deseado)
+                        if img is not None:
+                            cache_imagenes[deseado] = img
 
-            ret, frame = cap.read()
-            if not ret:
-                if current_video != cfg.LOOP:
-                    # El video del trigger terminó: volvemos al loop.
+                    if img is None:
+                        if deseado != cfg.LOOP:
+                            solicitar_video(cfg.LOOP)
+                            continue
+                        break
+
+                    if cap is not None:
+                        cap.release()
+                        cap = None
+
+                    imagen_actual = img
+                    inicio_imagen = time.monotonic()
+                    current_video, current_request = deseado, request
+                    delay = 30  # refresco rápido para responder sin latencia al giro del rotary
+                else:
+                    nuevo = abrir_video(deseado)
+                    if nuevo is None:
+                        if deseado != cfg.LOOP:
+                            solicitar_video(cfg.LOOP)
+                            continue
+                        print("No se pudo abrir el video de loop. Cerrando.")
+                        break
+                    if cap is not None:
+                        cap.release()
+                    cap, delay = nuevo
+                    imagen_actual = None
+                    inicio_imagen = None
+                    current_video, current_request = deseado, request
+                    fallos_loop = 0
+
+            # Obtención del frame actual (imagen estática vs video)
+            if imagen_actual is not None:
+                if (time.monotonic() - inicio_imagen) >= TIEMPO_INACTIVIDAD_IMAGEN:
+                    current_rotation = None
                     solicitar_video(cfg.LOOP)
                     continue
-                # El loop terminó: rebobinamos.
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                frame = imagen_actual
+            else:
                 ret, frame = cap.read()
                 if not ret:
-                    fallos_loop += 1
-                    if fallos_loop >= 3:
-                        print("No se pueden leer frames del video de loop. Cerrando.")
-                        break
-                    continue
-                fallos_loop = 0
+                    if current_video != cfg.LOOP:
+                        solicitar_video(cfg.LOOP)
+                        continue
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ret, frame = cap.read()
+                    if not ret:
+                        fallos_loop += 1
+                        if fallos_loop >= 3:
+                            print("No se pueden leer frames del video de loop. Cerrando.")
+                            break
+                        continue
+                    fallos_loop = 0
 
-            # El gestor de ventanas puede tardar en aplicar el fullscreen, y el
-            # monitor puede cambiar en caliente. Re-medimos de vez en cuando.
             frames += 1
             if frames % 50 == 0:
                 real = tamano_ventana()
@@ -347,7 +452,7 @@ def play_videos():
             cv2.imshow(VENTANA, lienzo.ajustar(frame))
 
             key = cv2.waitKey(delay) & 0xFF
-            if key == ord("q") or key == 27:  # q o Escape
+            if key == ord("q") or key == 27:
                 break
             if ventana_cerrada():
                 break

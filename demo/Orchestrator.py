@@ -21,15 +21,15 @@ import time
 if sys.platform.startswith("linux") and os.environ.get("WAYLAND_DISPLAY"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-import demo.models.ModelVideos as modelVideos  # noqa: E402
-import demo.models.ModelSerial as modelSerial
+import models.ModelVideos as modelVideos
+import models.ModelSerial as modelSerial
+import models.ModelDisplay as modelDisplay
+import AppState
 
 # ---------- Estado compartido entre hilos ----------
 stop_event = threading.Event()
 video_lock = threading.Lock()
 video_to_play = modelVideos.LOOP
-video_request = 0  # se incrementa en cada trigger para forzar el reinicio del video
-
 
 def validar_videos():
     """Avisa de los videos configurados que no existen en disco."""
@@ -38,20 +38,21 @@ def validar_videos():
         print(f"ADVERTENCIA: no existe el video '{path}'")
     return faltantes
 
-
 def central():
-
     faltantes = validar_videos()
     if faltantes:
         print(f"Faltan los siguientes videos: {faltantes}")
         return
-    
+
+    app_state = AppState.AppState()
+
     ser = modelSerial.initiate()
-    serial_thread = threading.Thread(target=modelSerial.read_serial, args=(ser, stop_event,), daemon=True)
-    #video_thread = threading.Thread(target=play_videos, daemon=True)
+    cursor = modelDisplay.ocultar_cursor()
+    serial_thread = threading.Thread(target=modelSerial.read_serial, args=(ser, stop_event, app_state,), daemon=True)
+    video_thread = threading.Thread(target=modelDisplay.play_videos, args=(stop_event, app_state,), daemon=True)
 
     serial_thread.start()
-    #video_thread.start()
+    video_thread.start()
 
     try:
         while not stop_event.is_set():
@@ -60,9 +61,11 @@ def central():
         print("\nCerrando programa (Ctrl+C)...")
         stop_event.set()
 
-    # Dar tiempo a los hilos para cerrar limpiamente
     serial_thread.join(timeout=3)
-    #video_thread.join(timeout=3)
-    #if cursor is not None:
-    #    cursor.terminate()
+    video_thread.join(timeout=3)
+    if cursor is not None:
+        cursor.terminate()
     print("Programa cerrado.")
+
+if __name__ == "__main__":
+    central()
