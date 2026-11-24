@@ -1,75 +1,64 @@
 # Sensors Nexmosphere
 
-Reproductor de video en modo kiosko controlado por sensores Nexmosphere.
-Escucha los mensajes de la API serial del controlador Xperience y lanza el video
-que corresponda a cada sensor.
+Reproductor multimedia en modo kiosko controlado por sensores Nexmosphere y comunicación serial con Arduino. Escucha los mensajes de la API serial del controlador Xperience (115200 baudios), gestiona el estado de forma concurrente y lanza videos (individuales o en mosaico de hasta 4 pantallas) o imágenes estáticas según la interacción física.
 
-- `main.py` — lógica: puerto serie, interpretación de mensajes y reproducción.
-- `ModelVideos.py` — **configuración**: qué video dispara cada sensor, monitor,
-  ajuste de pantalla. Es el único archivo que hay que editar para cambiar videos.
-- `videos/` — los archivos `.mp4`.
-- `docs/` — manuales y datasheets oficiales de Nexmosphere.
+---
+
+## Arquitectura del Proyecto
+
+El código está modularizado para separar la lectura de hardware, el estado concurrente y la renderización en pantalla:
+
+- **`main.py`** — Punto de entrada y orquestación de hilos.
+- **`AppState.py`** — Gestión de estado *thread-safe* (`threading.Lock`) entre los hilos de lectura serial, Arduino y video.
+- **`constants.py`** — Identificadores de sensores, constantes de tags RFID y banderas de control para Arduino.
+- **`models/ModelVideos.py`** — **Configuración principal**: mapeo de sensores a rutas de video/imagen, video en bucle (`LOOP`), selección de monitor, modo de ajuste y color de fondo. *Es el único archivo que necesitas editar para cambiar contenido.*
+- **`models/ModelSerial.py`** — Detección automática y apertura del puerto USB-serial del controlador Nexmosphere (priorizando conversores Prolific a `115200` baudios).
+- **`models/ModelSignals.py`** — Parser de mensajes `XR[...]` y `X***[...]` de Nexmosphere hacia acciones de video o comandos de Arduino.
+- **`models/ModelArduino.py`** — Hilo de comunicación serial (`9600` baudios) hacia un microcontrolador Arduino (chip `CH340`) para disparar acciones externas (ej. iluminación o actuadores) mediante banderas (`FLAG1`–`FLAG4`).
+- **`models/ModelDisplay.py`** — Motor de reproducción en ventana kiosko sin bordes (`OpenCV`), composición en mosaico (1, 2 o 4 secciones) y renderizado de imágenes con retorno automático al loop.
+- **`videos/`** — Archivos multimedia (`.mp4`, `.png`, `.jpg`, `.jpeg`).
+- **`docs/`** — Manuales y datasheets oficiales de Nexmosphere.
 
 ---
 
 ## Arranque rápido (un clic)
 
-Lo único que necesitas es tener Python instalado.
+Solo necesitas tener **Python 3.10 o superior** instalado (el código utiliza sentencias `match/case`):
 
 - **Windows** → doble clic en **`iniciar.bat`**
 - **Linux** → doble clic en **`iniciar.sh`** (o `./iniciar.sh` en la terminal)
 
-La primera vez crea el entorno virtual e instala las dependencias solo; las
-siguientes arranca directo. Si el entorno existe pero le faltan paquetes,
-también los instala. Para forzar un puerto concreto:
+La primera vez crea el entorno virtual (`venv`) e instala las dependencias automáticamente; en ejecuciones posteriores arranca directo. Para forzar un puerto específico en el controlador Nexmosphere:
 
-```
-iniciar.bat COM3            (Windows)
-./iniciar.sh /dev/ttyUSB0   (Linux)
+```bash
+iniciar.bat COM3            # Windows
+./iniciar.sh /dev/ttyUSB0   # Linux
 ```
 
-En Linux, si al hacer doble clic no arranca, marca el archivo como ejecutable
-(clic derecho → Propiedades → Permisos → *Permitir ejecutar*) o desde terminal:
-`chmod +x iniciar.sh`
-
-El resto de esta sección es la instalación manual, por si la prefieres.
+> **Nota en Linux:** Si al hacer doble clic no se ejecuta, dale permisos desde la terminal con `chmod +x iniciar.sh` o en *Propiedades → Permisos → Permitir ejecutar*.
 
 ---
 
 ## Instalación manual
 
-Requiere **Python 3.8 o superior** (probado en 3.12).
-
 ### Linux
 
 ```bash
-# 1. Crear el entorno virtual
+# 1. Crear y activar el entorno virtual
 python3 -m venv venv
-
-# 2. Activarlo
 source venv/bin/activate
 
-# 3. Instalar dependencias
+# 2. Instalar dependencias (opencv-python, numpy, pyserial)
 pip install -r requirements.txt
 ```
 
-Si `python3 -m venv` falla, instala el paquete: `sudo apt install python3-venv`
-
-**Permisos del puerto serie.** En Linux el puerto pertenece al grupo `dialout` y
-hay que añadir tu usuario una sola vez:
+**Permisos del puerto serie:** Añade tu usuario al grupo `dialout` una sola vez y reinicia sesión (o usa `newgrp dialout` en la terminal actual):
 
 ```bash
 sudo usermod -aG dialout $USER
 ```
 
-El cambio no aplica hasta cerrar y volver a abrir sesión. Para probar de
-inmediato sin reiniciar sesión, abre una terminal con el grupo ya activo:
-
-```bash
-newgrp dialout
-```
-
-Opcional, para ocultar el cursor del ratón en el kiosko:
+**Ocultar cursor (opcional):** El sistema utiliza `unclutter` en Linux/X11 si `OCULTAR_CURSOR` está activo:
 
 ```bash
 sudo apt install unclutter
@@ -78,183 +67,109 @@ sudo apt install unclutter
 ### Windows
 
 ```powershell
-# 1. Crear el entorno virtual
+# 1. Crear y activar el entorno virtual (PowerShell)
 python -m venv venv
-
-# 2. Activarlo (PowerShell)
 venv\Scripts\Activate.ps1
 
-# 3. Instalar dependencias
+# 2. Instalar dependencias
 pip install -r requirements.txt
 ```
 
-En **CMD** en lugar de PowerShell, el paso 2 es `venv\Scripts\activate.bat`.
+*(Si PowerShell bloquea el script, ejecuta `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` una sola vez.)*
 
-Si PowerShell bloquea el script de activación, permite los scripts locales una
-sola vez:
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
-
-En Windows no hay que tocar permisos, pero sí necesitas el **driver del cable**
-(Prolific PL2303, FTDI, CH340 — según el cable). Comprueba en el Administrador
-de dispositivos que aparezca un puerto `COMx`.
-
-### Desactivar el entorno
-
-En ambos sistemas: `deactivate`
+Asegúrate de tener instalados los drivers de los cables USB-Serial:
+- **Nexmosphere:** Prolific (`PL2303`)
+- **Arduino (opcional):** `CH340` / `CH341`
 
 ---
 
-## Uso
+## Uso y controles
 
-Con el entorno activado:
+Con el entorno virtual activado:
 
 ```bash
-python main.py                # autodetecta el puerto
-python main.py /dev/ttyUSB0   # forzar puerto en Linux
-python main.py COM3           # forzar puerto en Windows
+python main.py                # Autodetecta Nexmosphere (Prolific) y Arduino (CH340)
+python main.py /dev/ttyUSB0   # Fuerza el puerto Nexmosphere en Linux
+python main.py COM3           # Fuerza el puerto Nexmosphere en Windows
 ```
 
-Salir del kiosko: tecla **`q`** o **`Escape`**.
-
-Al arrancar imprime los puertos candidatos, los monitores detectados y la
-resolución a la que ajusta el video, además de avisar de cualquier video
-configurado que no exista en disco.
-
-> **Importante:** conecta los sensores al X-talk **antes** de alimentar el
-> controlador Xperience. Si los enchufas después, el controlador no los reconoce
-> y no emite ningún mensaje (sección 4.1 del manual XR Range).
+- **Salir del modo kiosko:** Presiona **`q`** o **`Escape`** sobre la ventana de video.
+- **Orden de encendido:** Conecta todos los sensores al bus X-talk **antes** de energizar el controlador Xperience; de lo contrario, no serán reconocidos.
 
 ---
 
-## Configuración
+## Configuración (`models/ModelVideos.py`)
 
-Todo en `ModelVideos.py`:
+Toda la personalización visual y de sensores se concentra en `models/ModelVideos.py`:
 
-| Ajuste | Para qué sirve |
-|---|---|
-| `RFID_POR_TAG` | Número de tag → video al levantar el producto |
-| `RFID_POR_COMBO` | Dos tags en secuencia → video de combinación |
-| `SENSORES` | `(dirección, canal)` → valor del mensaje → video |
-| `ROTARY` | Rangos de posición del rotary → video |
-| `MONITOR` | Monitor del kiosko: nombre (`"DP-3"`), índice (`0`) o `"auto"` |
-| `AJUSTE` | `"cubrir"` (llena y recorta), `"contener"` (completo con relleno), `"estirar"` |
-| `COLOR_FONDO` | Relleno en modo `"contener"`: `"auto"` o color BGR |
-| `BAUDRATE` | 115200 por defecto |
+| Parámetro | Descripción |
+| :--- | :--- |
+| `LOOP` | Ruta (o tupla de rutas) del video base que se reproduce en bucle en reposo. |
+| `SENSORS` | Diccionario indexado por constantes (`constants.py`) con el subdiccionario `"videos"` mapeando cada valor/tag a su archivo multimedia. |
+| `MONITOR` | Monitor destino en X11: nombre (`"DP-1"`, `"HDMI-1"`), índice entero (`0`, `1`) o `"auto"` / `"primary"`. |
+| `MONITOR_X` / `MONITOR_Y` | Coordenadas `(x, y)` de respaldo si no se detectan monitores vía `xrandr` (Windows/Wayland). |
+| `AJUSTE` | `"cubrir"` (llena pantalla recortando bordes), `"contener"` (video completo con relleno), `"estirar"`. |
+| `COLOR_FONDO` | Color BGR `(B, G, R)` para las bandas en modo `"contener"`, o `"auto"` para muestrear el color promedio de los bordes del video. |
+| `OCULTAR_CURSOR` | `True` / `False` para ocultar el puntero del ratón en Linux/X11 mediante `unclutter`. |
 
-Añadir un sensor nuevo es una entrada más en `SENSORES`, sin tocar `main.py`.
+### Modos de reproducción y mosaico
 
-### Notas de pantalla
-
-Los videos son 1920×1080. Si el monitor tiene otra resolución, `AJUSTE`
-determina qué pasa; con `"cubrir"` nunca aparecen franjas.
-
-En Linux con Wayland, el programa fuerza el backend X11 de Qt automáticamente,
-porque Wayland nativo no permite que la aplicación se coloque en un monitor
-concreto. Los nombres de monitor salen de `xrandr --listmonitors`.
+1. **Multi-video simultáneo (RFID):** Al levantar múltiples tags RFID (`PU`), el sistema apila los tags activos y compone dinámicamente la pantalla:
+   - **1 tag:** Pantalla completa.
+   - **2 tags:** Pantalla dividida verticalmente en 2 secciones (izquierda / derecha).
+   - **3 o 4 tags:** Cuadrícula 2×2 (si hay 3 videos activos, descarta el más antiguo de la lista o acomoda hasta 4 fuentes simultáneas).
+   - Al volver a colocar los tags (`PB`) o finalizar los videos que no son loop, regresa automáticamente a `cfg.LOOP`.
+2. **Imágenes estáticas:** Si un sensor apunta a un archivo `.png`, `.jpg` o `.jpeg`, se muestra en pantalla durante **2.0 segundos** (`TIEMPO_INACTIVIDAD_IMAGEN`) y vuelve automáticamente a `cfg.LOOP`.
 
 ---
 
-## Referencia de la API serial
+## Referencia de Hardware y API Serial
 
-Baudrate **115200**. Cada línea es un mensaje.
+### Controlador Nexmosphere (`115200` baudios)
 
-### RFID (XR Range)
+Mapeo implementado en `models/ModelSignals.py`:
 
-Cada evento manda **dos mensajes consecutivos**: primero el número de tag y
-después la dirección X-talk de la antena donde ocurrió.
+| Sensor / Dispositivo | Dirección / Formato | Mensajes recibidos | Acción en el sistema |
+| :--- | :--- | :--- | :--- |
+| **Antena RFID (XR)** | `XR[PUxxx]` / `XR[PBxxx]` | `PU` (levantar) / `PB` (colocar) tag `001`–`250` | Añade/quita el tag de la pila activa (`RFID_TAG`) para reproducir 1, 2 o 4 videos en mosaico. |
+| **Push Buttons** | `X001A[...]` | `[3]` (Botón 2) / `[17]` (Botón 1) / `[0]` (soltado) | Envía `FLAG1` (`"3"`) o `FLAG2` (`"17"`) al Arduino. |
+| **Rotary Button** | `X002B[Dr=X]` | `Dr=1` a `Dr=20` | Reproduce el video asignado al índice de rotación (`ROTARY_BUTTON`). |
+| **Sensor Magnético** | `X003A[X]` | Valores distintos de `0` y `4` disparan evento | Reproduce el video asociado (`MAGNETIC_PICK_UP_SENSOR`). |
+| **Air Button** | `X004B[Bs=...]` | `Bs=NEAR` / `Bs=FAR` | Envía `FLAG3` (`NEAR`) o `FLAG4` (`FAR`) al Arduino. |
+| **Sensor de Presencia** | `X005B[Dz=...]` | `Dz=AB` (0), `Dz=10` (10), o zonas numéricas (`PRESENCE_SENSOR`) | Reproduce el video correspondiente a la zona de distancia detectada. |
+| **Sensor de Luz** | `X006A[X]` | Valor numérico entero | Actualiza estado interno `LIGHT_SENSOR`. |
 
-```
-XR[PUxxx]   Pick-up: el tag se levantó de la antena
-X***A[1]    ...seguido de la dirección de esa antena
+### Comunicación con Arduino (`9600` baudios)
 
-XR[PBxxx]   Place-back: el tag se colocó en la antena
-X***A[0]    ...seguido de la dirección de esa antena
-```
+`models/ModelArduino.py` busca automáticamente un dispositivo con descriptor **`CH340`**. Cuando un Push Button o Air Button se activa, envía la bandera correspondiente terminada en salto de línea (`\n`):
 
-`xxx` es el número de tag, de **001 a 250**. Cada tag de la instalación debe
-tener un número distinto. Ejemplo real de levantar el tag 4 en la antena 001:
+- `FLAG1\n` → Push Button valor `3`
+- `FLAG2\n` → Push Button valor `17`
+- `FLAG3\n` → Air Button `Bs=NEAR`
+- `FLAG4\n` → Air Button `Bs=FAR`
 
-```
-XR[PU004]
-X001A[1]
-```
+### Ajustes del driver RFID (XR-DR1)
 
-Una antena detecta hasta **4 tags simultáneos**, con 10 mm de separación mínima
-entre ellos.
+Si ocurren disparos fantasma (*ghost pick-ups*) por interferencia electromagnética, envía estos comandos al controlador Nexmosphere al iniciar (se pierden al desconectar la corriente):
 
-### Sensor magnético (pick-up)
-
-```
-X003A[3]   Stand by
-X003A[0]   Pick up
-```
-
-> La configuración actual dispara el video en `[3]`. Si debe salir al levantar
-> el producto, cambia la clave a `"0"` en `ModelVideos.py`.
-
-### Air Button
-
-```
-X004B[Bs=NEAR]   Cerca
-X004B[Bs=FAR]    Lejos
-X004B[Bs=IDLE]   Fuera del área
+```text
+X001S[6:4]   # Sube el filtro de ghost pick-ups (rango 1-20, defecto 2)
+X001S[4:3]   # Ganancia de antena calibrada a 38 dB (valor recomendado)
+X001S[5:1]   # LED rojo indicador de interferencia nivel 3
 ```
 
-### Rotary Button
-
-```
-X002B[Dr=1] ... X002B[Dr=20]
-```
-
-### Push Buttons
-
-```
-X001A[17]   Botón 1 pulsado
-X001A[3]    Botón 2 pulsado
-X001A[0]    Botón soltado (ambos casos)
-```
-
-### Sensor de presencia
-
-```
-X005B[Dz=AB]   Presencia detectada
-```
+*(Consulta `docs/Product+Manual+-+XR+Range+RFID.pdf`, secciones 4.2 y 5 para más detalles.)*
 
 ---
 
-## Ajustes del driver RFID (XR-DR1)
+## Solución de problemas
 
-Se envían por serial al controlador. **Se pierden al cortar la alimentación**,
-hay que reenviarlos en cada arranque.
-
-```
-X001S[6:X]   Filtro de "ghost pick-ups", X entre 1 y 20 (por defecto 2)
-X001S[4:3]   Ganancia de antena: 38dB, el valor por defecto
-X001S[5:1]   LED rojo: mostrar interferencia de nivel 3
-```
-
-Si aparecen disparos de video espurios (sin que nadie toque nada), la causa
-suele ser interferencia. La solución documentada es **subir el filtro** con
-`X001S[6:4]` o `[6:6]` antes de tocar el código: sube a costa de un poco de
-respuesta. La ganancia mejor no cambiarla — todo el XR Range está calibrado
-para 38 dB, y subirla aumenta la interferencia entre antenas.
-
-Más detalle en `docs/Product+Manual+-+XR+Range+RFID.pdf`, secciones 4.2 y 5.
-
----
-
-## Problemas frecuentes
-
-| Síntoma | Causa probable |
-|---|---|
-| `Permission denied: '/dev/ttyUSB0'` | Falta el grupo `dialout` (ver Instalación) |
-| `Access is denied` en `COMx` | Otro programa tiene el puerto abierto (PuTTY, Arduino IDE) |
-| No encuentra ningún puerto | Falta el driver del cable, o no está conectado |
-| No llega ningún mensaje | Los sensores se conectaron después de alimentar el controlador |
-| El kiosko abre en el monitor equivocado | Ajusta `MONITOR` en `ModelVideos.py` |
-| Franjas en los bordes del video | Pon `AJUSTE = "cubrir"` |
-| Disparos de video sin tocar nada | Ghost triggers: sube el filtro con `X001S[6:X]` |
-| El cursor se ve sobre el video | Instala `unclutter` (solo Linux) |
+| Síntoma | Causa probable y solución |
+| :--- | :--- |
+| `Permission denied: '/dev/ttyUSB0'` | Tu usuario no pertenece al grupo `dialout`. Ejecuta `sudo usermod -aG dialout $USER` y reinicia sesión. |
+| `Access is denied` en `COMx` | El puerto está ocupado por PuTTY, Arduino IDE u otro monitor serie. Ciérralo antes de iniciar. |
+| No detecta el controlador Nexmosphere | El código filtra automáticamente dispositivos con chip **Prolific**. Verifica el driver o pasa el puerto manualmente (`iniciar.bat COMx`). |
+| `Could not find arduino!` | No hay ningún conversor `CH340` conectado; el sistema continuará operando solo con los videos. |
+| Los sensores no envían datos | Fueron conectados después de encender el controlador Xperience. Reinicia la alimentación del controlador. |
+| El kiosko abre en el monitor incorrecto | Revisa los nombres impresos en consola al arrancar y ajusta `MONITOR` en `models/ModelVideos.py`. |
+| Franjas negras a los lados del video | Cambia `AJUSTE = "cubrir"` o usa `AJUSTE = "contener"` con `COLOR_FONDO = "auto"`. |
