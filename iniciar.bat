@@ -49,7 +49,7 @@ REM --- Arrancar ----------------------------------------------------------
 echo.
 echo Iniciando... pulsa 'q' o Escape sobre el video para salir.
 echo.
-"%VENV_PY%" main.py %*
+"%VENV_PY%" demo/orchestrator.py %*
 if errorlevel 1 goto error_run
 
 endlocal

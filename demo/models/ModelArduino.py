@@ -7,11 +7,14 @@ import serial
 import models.ModelSerial as model_serial
 
 PORT = None
+CLOSED = False
 
 def main_cycle(stop_event, app_state):
-    global PORT
+    global PORT, CLOSED
     print ("Entering arduino cycle...")
     while not stop_event.is_set():
+        if CLOSED:
+            continue
         if not app_state.get_updated_arduino():
             continue
 
@@ -20,8 +23,8 @@ def main_cycle(stop_event, app_state):
         if not PORT:
             port = model_serial.get_port("CH340")
             if not port:
-                stop_event.set()
                 print("Could not find arduino!")
+                CLOSED = True
                 return
             PORT = port
 
