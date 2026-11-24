@@ -26,7 +26,6 @@ def process_line(line, app_state):
     if not m:
         return
     addr, canal, valor = m.group(1), m.group(2), m.group(3)
-    print(line)
     match addr:
         case "001":
             if valor == "0":
@@ -68,7 +67,6 @@ def process_line(line, app_state):
             app_state.set_status_arduino(cts.PRESENCE_SENSOR_MESSAGE + converted_valor.strip("0"))
 
         case "006":
-            print(line)
             app_state.set_status(cts.LIGHT_SENSOR, int(valor))
             print("Light sensor")
         case "007":
