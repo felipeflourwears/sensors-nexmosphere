@@ -38,7 +38,7 @@ VENTANA = "Video"
 # ---------------------------------------------------------------------------
 # Reproducción en modo kiosko
 # ---------------------------------------------------------------------------
-def ocultar_cursor():
+def hide_cursor():
     """Oculta el puntero del ratón. Solo en Linux/X11, y si 'unclutter' existe."""
     if not cfg.OCULTAR_CURSOR or ES_WINDOWS or ES_MAC:
         return None
@@ -409,7 +409,7 @@ def elegir_video(sensor, value):
 
     match sensor:
         case cts.PUSH_BUTTON:
-            return _buscar_video(sensor_clave.get("videos", {}), value)
+            return ""
 
         case cts.ROTARY_BUTTON:
             try:

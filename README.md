@@ -28,9 +28,6 @@ iniciar.bat COM3            (Windows)
 ./iniciar.sh /dev/ttyUSB0   (Linux)
 ```
 
-Si algo falla, la ventana **no se cierra**: deja el error en pantalla con las
-causas más probables.
-
 En Linux, si al hacer doble clic no arranca, marca el archivo como ejecutable
 (clic derecho → Propiedades → Permisos → *Permitir ejecutar*) o desde terminal:
 `chmod +x iniciar.sh`

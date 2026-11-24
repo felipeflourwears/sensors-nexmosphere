@@ -30,8 +30,12 @@ def process_line(line, app_state):
         case "001":
             if valor == "0":
                 return
-            app_state.set_status(cts.PUSH_BUTTON, int(valor))
-            print("Push buttons")
+            if valor == "3":
+                app_state.set_status_arduino(cts.PUSH_FLAG_1)
+                print("Push buttons")
+            if valor == "17":
+                app_state.set_status_arduino(cts.PUSH_FLAG_2)
+                print("Push buttons")
         case "002":
             converted_valor = valor.split("=")[1]
             app_state.set_status(cts.ROTARY_BUTTON, int(converted_valor))
@@ -44,27 +48,23 @@ def process_line(line, app_state):
         case "004":
             match valor:
                 case "Bs=NEAR":
-                    app_state.set_status_arduino(cts.AIR_BUTTON_NEAR_MESSAGE)
+                    app_state.set_status_arduino(cts.AIR_BUTTON_FLAG_NEAR)
                 case "Bs=FAR":
-                    app_state.set_status_arduino(cts.AIR_BUTTON_FAR_MESSAGE)
+                    app_state.set_status_arduino(cts.AIR_BUTTON_FLAG_FAR)
             print("Air Button")
         case "005":
             converted_valor = valor.split("=")[1]
             print("Presence sensor")
             match converted_valor:
                 case "XX":
-                    #out of reach
                     return
                 case "AB":
                     app_state.set_status(cts.PRESENCE_SENSOR, 0)
-                    app_state.set_status_arduino(cts.PRESENCE_SENSOR_MESSAGE + "0")
                     return
                 case "10":
                     app_state.set_status(cts.PRESENCE_SENSOR, 10)
-                    app_state.set_status_arduino(cts.PRESENCE_SENSOR_MESSAGE + "10")
                     return
             app_state.set_status(cts.PRESENCE_SENSOR, int(converted_valor.strip("0")))
-            app_state.set_status_arduino(cts.PRESENCE_SENSOR_MESSAGE + converted_valor.strip("0"))
 
         case "006":
             app_state.set_status(cts.LIGHT_SENSOR, int(valor))
