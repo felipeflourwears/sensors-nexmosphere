@@ -18,6 +18,7 @@ current_sensor = cts.NONE
 current_id = None
 
 current_rotation = None
+current_distance = None
 current_video = None
 
 current_rfid_stack = []
@@ -396,10 +397,13 @@ def _buscar_video(diccionario, clave):
 def elegir_video(sensor, value):
     sensor_clave = cfg.SENSORS.get(sensor) or {}
     global current_rotation
+    global current_distance
     global current_rfid_stack
 
     if sensor != cts.ROTARY_BUTTON:
         current_rotation = None
+    if sensor != cts.PRESENCE_SENSOR:
+        current_distance = None
     if sensor != cts.RFID_TAG:
         current_rfid_stack = []
 
@@ -424,7 +428,14 @@ def elegir_video(sensor, value):
             return _buscar_video(sensor_clave.get("videos", {}), value)
 
         case cts.PRESENCE_SENSOR:
-            return _buscar_video(sensor_clave.get("videos", {}), value)
+            try:
+                idx = int(value)
+            except (TypeError, ValueError):
+                return ""
+            if idx == current_distance:
+                return ""
+            current_distance = idx
+            return _buscar_video(sensor_clave.get("videos", {}), idx)
 
         case cts.LIGHT_SENSOR:
             return ""
@@ -456,7 +467,7 @@ def elegir_video(sensor, value):
 
 
 def play_videos(stop_event, app_state):
-    global current_video, current_rotation, current_rfid_stack
+    global current_video, current_rotation, current_distance, current_rfid_stack
 
     monitor = elegir_monitor(cfg.MONITOR)
     crear_ventana_kiosko(monitor)
@@ -535,6 +546,7 @@ def play_videos(stop_event, app_state):
             if imagen_actual is not None:
                 if (time.monotonic() - inicio_imagen) >= TIEMPO_INACTIVIDAD_IMAGEN:
                     current_rotation = None
+                    current_distance = None
                     solicitar_video(cfg.LOOP)
                     continue
                 frame_salida = lienzo.ajustar(imagen_actual)

@@ -12,6 +12,7 @@ Cómo funciona:
 """
 
 import os
+import demo.constants as cts
 
 # Rutas relativas a este archivo, no al directorio desde el que se lanza el
 # programa. Así funciona igual con doble clic, systemd o autostart de kiosko.
@@ -56,31 +57,30 @@ RFID_COMBO_TIMEOUT = 3.0
 # Resto de sensores: (dirección, canal) -> valor del mensaje -> video
 # ---------------------------------------------------------------------------
 SENSORES = {
-    ("001", "A"): {
+    cts.PUSH_BUTTON: {
         "nombre": "Push buttons",
         "videos": {
-            "17": v("fanta.mp4"),           # X001A[17] -> botón 1
-            "3": v("santa_clara.mp4"),   # X001A[3]  -> botón 2
+            17: v("fanta.mp4"),           # X001A[17] -> botón 1
+            3: v("santa_clara.mp4"),   # X001A[3]  -> botón 2
             # X001A[0] es "soltar el botón": sin video, no hace nada.
         },
     },
-    ("003", "A"): {
+    cts.MAGNETIC_PICK_UP_SENSOR: {
         "nombre": "Sensor magnético",
         "videos": {
-            "3": v("delvalle.mp4"),
+            3: v("delvalle.mp4"),
             # Según el manual, X003A[0] es el pick-up y [3] el stand-by.
             # Si el video debe salir al levantar el producto, cambia "3" por "0".
         },
     },
-    ("004", "B"): {
+    cts.AIR_BUTTON: {
         "nombre": "Air button",
         "videos": {
-            "Bs=NEAR": v("close.mp4"),
-            "Bs=FAR": v("far.mp4"),
-            # Bs=IDLE (fuera del área): sin video.
+            cts.AIR_BUTTON_NEAR: v("close.mp4"),
+            cts.AIR_BUTTON_FAR: v("far.mp4"),
         },
     },
-    ("005", "B"): {
+    cts.PRESENCE_SENSOR: {
         "nombre": "Sensor de presencia",
         "videos": {
             "Dz=AB": v("presence_sensor.mp4"),

@@ -3,6 +3,16 @@ import constants as cts
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VIDEO_DIR = os.path.join(BASE_DIR, "videos")
 
+OCULTAR_CURSOR = True
+MONITOR = "DP-3"
+
+MONITOR_X = 0
+MONITOR_Y = 0
+
+AJUSTE = "cubrir"
+COLOR_FONDO = "auto"
+
+
 def v(name):
     return os.path.join(VIDEO_DIR, name)
 
@@ -23,7 +33,7 @@ SENSORS = {
     (cts.PUSH_BUTTON): {
         "name": "Push buttons",
         "videos": {
-            "17": v("fanta.mp4"),
+            "17": v("sprite.mp4"),
             "3": v("santa_clara.mp4"),
         },
     },
@@ -43,33 +53,43 @@ SENSORS = {
     (cts.PRESENCE_SENSOR): {
         "name": "Sensor de presencia",
         "videos": {
-            cts.PRESENCE_SENSOR_CLOSE: v("presence_sensor.mp4"),
-        },
+            0:  v("presence/0.jpeg"),
+            1:  v("presence/1.jpeg"),
+            2:  v("presence/2.jpeg"),
+            3:  v("presence/3.jpeg"),
+            4:  v("presence/4.jpeg"),
+            5:  v("presence/5.jpeg"),
+            6:  v("presence/6.jpeg"),
+            7:  v("presence/7.jpeg"),
+            8:  v("presence/8.jpeg"),
+            9:  v("presence/9.jpeg"),
+            10: v("presence/10.jpeg")
+        }
     },
     cts.ROTARY_BUTTON: {
         "name": "Rotary Button",
         "videos": {
-            0:  v("rotary/0.png"),
-            1:  v("rotary/1.png"),
-            2:  v("rotary/2.png"),
-            3:  v("rotary/3.png"),
-            4:  v("rotary/4.png"),
-            5:  v("rotary/5.png"),
-            6:  v("rotary/6.png"),
-            7:  v("rotary/7.png"),
-            8:  v("rotary/8.png"),
-            9:  v("rotary/9.png"),
-            10: v("rotary/10.png"),
-            11: v("rotary/11.png"),
-            12: v("rotary/12.png"),
-            13: v("rotary/13.png"),
-            14: v("rotary/14.png"),
-            15: v("rotary/15.png"),
-            16: v("rotary/16.png"),
-            17: v("rotary/17.png"),
-            18: v("rotary/18.png"),
-            19: v("rotary/19.png"),
-            20: v("rotary/20.png"),
+            0:  v("rotary/Frame0.jpg"),
+            1:  v("rotary/Frame1.jpg"),
+            2:  v("rotary/Frame2.jpg"),
+            3:  v("rotary/Frame3.jpg"),
+            4:  v("rotary/Frame4.jpg"),
+            5:  v("rotary/Frame5.jpg"),
+            6:  v("rotary/Frame6.jpg"),
+            7:  v("rotary/Frame7.jpg"),
+            8:  v("rotary/Frame8.jpg"),
+            9:  v("rotary/Frame9.jpg"),
+            10: v("rotary/Frame10.jpg"),
+            11: v("rotary/Frame11.jpg"),
+            12: v("rotary/Frame12.jpg"),
+            13: v("rotary/Frame13.jpg"),
+            14: v("rotary/Frame14.jpg"),
+            15: v("rotary/Frame15.jpg"),
+            16: v("rotary/Frame16.jpg"),
+            17: v("rotary/Frame17.jpg"),
+            18: v("rotary/Frame18.jpg"),
+            19: v("rotary/Frame19.jpg"),
+            20: v("rotary/Frame20.jpg"),
         }
     }
 }

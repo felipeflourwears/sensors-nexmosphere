@@ -94,9 +94,13 @@ def open_port(forced=None):
             list_available_ports()
             return None
         print("Puertos candidatos detectados:")
+
+        candidates = []
+
         for p in ports:
-            print(f"  {p.device} — {p.description}")
-        candidates = [p.device for p in ports]
+            if "Prolific" in p.description:
+                candidates.append(p.device)
+                print(f"  {p.device} — {p.description}")
 
     last_error = None
     for device in candidates:
@@ -112,6 +116,25 @@ def open_port(forced=None):
     if last_error is not None:
         print(f"\n{help_error_port(last_error)}")
     return None
+
+def get_port(port_description):
+    ports = list_candidates()
+    if not ports:
+        print("ERROR: No se encontró ningún conversor USB-serial conectado.")
+        list_available_ports()
+        return None
+    print("Puertos candidatos detectados:")
+
+    candidates = []
+
+    for p in ports:
+        if port_description in p.description:
+            candidates.append(p.device)
+            print(f"ARDUINO FOUND:  {p.device} — {p.description}")
+            return p.device
+    return None
+
+
 
 
 def read_serial(ser, stop_event, app_state):

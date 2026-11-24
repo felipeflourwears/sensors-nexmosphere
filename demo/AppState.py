@@ -13,6 +13,11 @@ class AppState:
         self.rfids = []
         self.updated_rfids = False
 
+        self.updated_arduino = False
+        self.message = ""
+
+    # sensors
+
     def get_updated(self) -> bool:
         with self._lock:
             return self.updated
@@ -30,6 +35,8 @@ class AppState:
             self.updated = True
             self.updated_rfids = False
 
+
+    # rfids
 
     def get_updated_rfids(self) -> bool:
         with self._lock:
@@ -53,3 +60,19 @@ class AppState:
                 self.rfids.remove(value)
                 self.updated_rfids = True
                 self.updated = False
+
+    # get arduino
+
+    def get_updated_arduino(self) -> bool:
+            with self._lock:
+                return self.updated_arduino
+
+    def get_status_arduino(self) -> str:
+        with self._lock:
+            self.updated_arduino = False
+            return self.message
+
+    def set_status_arduino(self, new_value: int):
+        with self._lock:
+            self.message = new_value
+            self.updated_arduino = True

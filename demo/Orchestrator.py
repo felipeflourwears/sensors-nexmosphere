@@ -23,6 +23,8 @@ if sys.platform.startswith("linux") and os.environ.get("WAYLAND_DISPLAY"):
 import models.ModelVideos as modelVideos
 import models.ModelSerial as modelSerial
 import models.ModelDisplay as modelDisplay
+import models.ModelArduino as modelArduino
+
 import AppState
 
 # ---------- Estado compartido entre hilos ----------
@@ -47,11 +49,14 @@ def central():
 
     ser = modelSerial.initiate()
     cursor = modelDisplay.ocultar_cursor()
+
     serial_thread = threading.Thread(target=modelSerial.read_serial, args=(ser, stop_event, app_state,), daemon=True)
     video_thread = threading.Thread(target=modelDisplay.play_videos, args=(stop_event, app_state,), daemon=True)
+    arduino_thread = threading.Thread(target=modelArduino.main_cycle, args=(stop_event, app_state,), daemon=True)
 
     serial_thread.start()
     video_thread.start()
+    arduino_thread.start()
 
     try:
         while not stop_event.is_set():

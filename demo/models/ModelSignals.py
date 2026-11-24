@@ -26,7 +26,7 @@ def process_line(line, app_state):
     if not m:
         return
     addr, canal, valor = m.group(1), m.group(2), m.group(3)
-
+    print(line)
     match addr:
         case "001":
             if valor == "0":
@@ -43,27 +43,32 @@ def process_line(line, app_state):
             app_state.set_status(cts.MAGNETIC_PICK_UP_SENSOR, int(valor))
             print("Magnetic pick up sensor")
         case "004":
-            return
             match valor:
                 case "Bs=NEAR":
-                    app_state.set_status(cts.AIR_BUTTON, cts.AIR_BUTTON_NEAR)
+                    app_state.set_status_arduino(cts.AIR_BUTTON_NEAR_MESSAGE)
                 case "Bs=FAR":
-                    app_state.set_status(cts.AIR_BUTTON, cts.AIR_BUTTON_FAR)
+                    app_state.set_status_arduino(cts.AIR_BUTTON_FAR_MESSAGE)
             print("Air Button")
         case "005":
             converted_valor = valor.split("=")[1]
             print("Presence sensor")
             match converted_valor:
                 case "XX":
+                    #out of reach
                     return
                 case "AB":
-                    app_state.set_status(cts.PRESENCE_SENSOR, cts.PRESENCE_SENSOR_CLOSE)
+                    app_state.set_status(cts.PRESENCE_SENSOR, 0)
+                    app_state.set_status_arduino(cts.PRESENCE_SENSOR_MESSAGE + "0")
                     return
                 case "10":
                     app_state.set_status(cts.PRESENCE_SENSOR, 10)
+                    app_state.set_status_arduino(cts.PRESENCE_SENSOR_MESSAGE + "10")
                     return
-            app_state.set_status(cts.AIR_BUTTON, int(converted_valor.strip("0")))
+            app_state.set_status(cts.PRESENCE_SENSOR, int(converted_valor.strip("0")))
+            app_state.set_status_arduino(cts.PRESENCE_SENSOR_MESSAGE + converted_valor.strip("0"))
+
         case "006":
+            print(line)
             app_state.set_status(cts.LIGHT_SENSOR, int(valor))
             print("Light sensor")
         case "007":
