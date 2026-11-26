@@ -4,10 +4,10 @@ import serial
 import models.ModelSerial as model_serial
 
 def main_cycle(stop_event, app_state, baud=9600, reset_wait=2.5, idle_sleep=0.05):
-    print("Entering arduino cycle...")
+    print("Entering microcontroller cycle...")
     port = model_serial.get_port("CH340")
     if not port:
-        print("Could not find arduino!")
+        print("Could not find microcontroller!")
         return
 
     ser = None
@@ -17,11 +17,11 @@ def main_cycle(stop_event, app_state, baud=9600, reset_wait=2.5, idle_sleep=0.05
         ser.reset_input_buffer()
 
         while not stop_event.is_set():
-            if not app_state.get_updated_arduino():
+            if not app_state.get_updated_micro():
                 time.sleep(idle_sleep)
                 continue
 
-            message = app_state.get_status_arduino()
+            message = app_state.get_status_micro()
             ser.write((message + "\n").encode("utf-8"))
             ser.flush()
 
@@ -35,4 +35,3 @@ def main_cycle(stop_event, app_state, baud=9600, reset_wait=2.5, idle_sleep=0.05
     finally:
         if ser and ser.is_open:
             ser.close()
-        print("Exiting arduino cycle.")

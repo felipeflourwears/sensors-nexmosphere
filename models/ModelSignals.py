@@ -31,10 +31,10 @@ def process_line(line, app_state):
             if valor == "0":
                 return
             if valor == "3":
-                app_state.set_status_arduino(cts.PUSH_FLAG_1)
+                app_state.set_status_micro(cts.PUSH_FLAG_1)
                 print("Push buttons")
             if valor == "17":
-                app_state.set_status_arduino(cts.PUSH_FLAG_2)
+                app_state.set_status_micro(cts.PUSH_FLAG_2)
                 print("Push buttons")
         case "002":
             converted_valor = valor.split("=")[1]
@@ -48,9 +48,9 @@ def process_line(line, app_state):
         case "004":
             match valor:
                 case "Bs=NEAR":
-                    app_state.set_status_arduino(cts.AIR_BUTTON_FLAG_NEAR)
+                    app_state.set_status_micro(cts.AIR_BUTTON_FLAG_NEAR)
                 case "Bs=FAR":
-                    app_state.set_status_arduino(cts.AIR_BUTTON_FLAG_FAR)
+                    app_state.set_status_micro(cts.AIR_BUTTON_FLAG_FAR)
             print("Air Button")
         case "005":
             converted_valor = valor.split("=")[1]
@@ -67,6 +67,7 @@ def process_line(line, app_state):
             app_state.set_status(cts.PRESENCE_SENSOR, int(converted_valor.strip("0")))
 
         case "006":
+            print(line)
             app_state.set_status(cts.LIGHT_SENSOR, int(valor))
             print("Light sensor")
         case "007":

@@ -13,7 +13,7 @@ class AppState:
         self.rfids = []
         self.updated_rfids = False
 
-        self.updated_arduino = False
+        self.updated_micro = False
         self.message = ""
 
     # sensors
@@ -61,18 +61,18 @@ class AppState:
                 self.updated_rfids = True
                 self.updated = False
 
-    # get arduino
+    # microcontroller
 
-    def get_updated_arduino(self) -> bool:
+    def get_updated_micro(self) -> bool:
             with self._lock:
-                return self.updated_arduino
+                return self.updated_micro
 
-    def get_status_arduino(self) -> str:
+    def get_status_micro(self) -> str:
         with self._lock:
-            self.updated_arduino = False
+            self.updated_micro = False
             return self.message
 
-    def set_status_arduino(self, new_value: int):
+    def set_status_micro(self, new_value: int):
         with self._lock:
             self.message = new_value
-            self.updated_arduino = True
+            self.updated_micro = True
